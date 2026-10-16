@@ -1,0 +1,115 @@
+/* ── Single-page desktop mode（单页桌面：常用 + 应用目录）──
+   本文件只服务单页形态，选择器全部限定在 .desktop-single / .ds-* 内，
+   多页桌面（.phone-swipe-layer / .icon-grid 原样式）完全不受影响。
+   图标沿用 .icon-item / .icon-glyph-box / .icon-label，
+   配色继续读主题变量（--c-home-* / --c-desktop-*），所以换肤色、换壁纸照常生效。 */
+
+.desktop-single {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+  padding: 2px 2px 18px;
+  scrollbar-width: none;
+}
+
+.desktop-single::-webkit-scrollbar {
+  display: none;
+}
+
+/* 「单页 / 分页」切换按钮：单页时在底部页码条里，和多页共用同一条 */
+.ds-mode-pill {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid var(--c-home-border);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font: inherit;
+  font-size: calc(11px*var(--app-text-scale,1));
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--c-home-text);
+  background: var(--c-home-card);
+  backdrop-filter: blur(10px) saturate(140%);
+  -webkit-backdrop-filter: blur(10px) saturate(140%);
+  cursor: pointer;
+  transition: transform 0.15s ease, opacity 0.15s ease;
+  white-space: nowrap;
+}
+
+.ds-mode-pill:active {
+  transform: scale(0.95);
+  opacity: 0.85;
+}
+
+.page-controls .ds-mode-pill {
+  margin-left: 10px;
+}
+
+/* ── 分区（常用 / 组件 / 应用目录）── */
+
+.ds-block {
+  margin-bottom: 16px;
+}
+
+.ds-block-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 8px 8px;
+}
+
+.ds-block-title {
+  font-size: calc(12.5px*var(--app-text-scale,1));
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--c-home-text);
+}
+
+.ds-block-count {
+  font-size: calc(10px*var(--app-text-scale,1));
+  color: var(--c-home-sub);
+}
+
+/* ── 单页图标网格：四列，按行向下排（不再定格 6×4，可以一直往下长）── */
+
+.ds-grid {
+  --slot-size: clamp(56px, calc((100vw - 108px) / 4), 66px);
+  --slot-gap-x: 20px;
+  display: grid;
+  grid-template-columns: repeat(4, var(--slot-size));
+  column-gap: var(--slot-gap-x);
+  row-gap: 6px;
+  justify-content: center;
+}
+
+.desktop-single .icon-item {
+  min-height: 76px;
+}
+
+/* ── 单页里的桌面组件：按行自然换行排列（多页模式是格子定位，这里只做布局覆盖）── */
+
+.icon-grid.ds-widgets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 12px;
+  flex: 0 0 auto;
+  grid-template-rows: none;
+  margin-top: 0;
+  padding-bottom: 0;
+}
+
+.icon-grid.ds-widgets .widget-glass {
+  margin-left: 0;
+}
+
+.icon-grid.ds-widgets .widget-drag-wrap {
+  display: contents;
+}

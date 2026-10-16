@@ -337,3 +337,30 @@ export function writeDockLayout(dock: DesktopIconId[]): DesktopIconId[] {
   kvSet(DOCK_LAYOUT_STORAGE_KEY, JSON.stringify(normalized));
   return normalized;
 }
+
+// ── Desktop view mode ─────────────────────────────────
+// 主屏的两种形态，只影响"怎么摆"，不影响图标布局 / 组件位置 / 主题：
+//   paged  = 原来的多页翻页桌面（保持原样，一行都不改）
+//   single = 单页桌面：上半是「常用」（沿用第一页的图标），下面接一个
+//            包含全部已装应用的「应用目录」。
+// 两者随时互相切换，切换只写这一个键。
+
+export const DESKTOP_VIEW_MODE_STORAGE_KEY = "ai_phone_desktop_view_mode_v1";
+
+export type DesktopViewMode = "paged" | "single";
+
+registerKvMigration(DESKTOP_VIEW_MODE_STORAGE_KEY);
+
+export function loadDesktopViewMode(): DesktopViewMode {
+  const raw = kvGet(DESKTOP_VIEW_MODE_STORAGE_KEY);
+  if (!raw) return "paged";
+  try {
+    return JSON.parse(raw) === "single" ? "single" : "paged";
+  } catch {
+    return raw === "single" ? "single" : "paged";
+  }
+}
+
+export function writeDesktopViewMode(mode: DesktopViewMode): void {
+  kvSet(DESKTOP_VIEW_MODE_STORAGE_KEY, JSON.stringify(mode === "single" ? "single" : "paged"));
+}

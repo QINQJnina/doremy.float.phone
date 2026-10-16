@@ -115,6 +115,9 @@ import {
   loadDockLayout,
   normalizeDock,
   writeDockLayout,
+  loadDesktopViewMode,
+  writeDesktopViewMode,
+  type DesktopViewMode,
   loadDesktopFolders,
   writeDesktopFolders,
   DOCK_LAYOUT_STORAGE_KEY,
@@ -1149,6 +1152,9 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
   const [layout, setLayout] = useState<DesktopLayout>(DEFAULT_LAYOUT);
   // Dock is an ordered icon-id list (max DOCK_MAX), kept disjoint from `layout`.
   const [dock, setDock] = useState<DesktopIconId[]>(DOCK_DEFAULT);
+  // 主屏形态：paged = 原来的多页翻页桌面；single = 单页桌面（常用 + 应用目录）。
+  // 只改变"怎么摆"，图标布局 / 组件位置 / 主题都不动，两者随时互相切换。
+  const [desktopViewMode, setDesktopViewMode] = useState<DesktopViewMode>("paged");
   // 桌面文件夹：tile 在 layout 里占格子，这张表管名字和成员
   const [folders, setFolders] = useState<DesktopFolderMap>({});
   const [openFolderId, setOpenFolderId] = useState<string | null>(null);
@@ -1581,6 +1587,7 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
       // Dock loads first so page normalization can keep the two disjoint.
       const hydratedDock = loadDockLayout();
       setDock(hydratedDock);
+      setDesktopViewMode(loadDesktopViewMode());
       const dockIds = new Set<DesktopIconId>(hydratedDock);
       const hydratedFolders = loadDesktopFolders();
       const rawV2 = kvGet(ICON_LAYOUT_STORAGE_KEY);
@@ -2287,6 +2294,104 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
   }, [getCustomAppForIcon]);
 
   const activeIcon = activeApp ? getDesktopIconMeta(activeApp) : null;
+
+  // ── 单页桌面 / 多页桌面 ──────────────────────────────
+  // 两者共用同一份图标布局、组件、主题，切换只是换一种摆法并记一个键。
+  const toggleDesktopViewMode = useCallback(() => {
+    setDesktopViewMode(prev => {
+      const next: DesktopViewMode = prev === "single" ? "paged" : "single";
+      writeDesktopViewMode(next);
+      return next;
+    });
+  }, []);
+
+  // 单页形态是滚动列表、不做拖拽排布：进入单页时自动退出编辑态，
+  // 否则编辑态的抖动动画和「添加/装扮」按钮会挂在单页上。
+  useEffect(() => {
+    if (desktopViewMode === "single" && editMode) {
+      exitEditMode();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [desktopViewMode, editMode]);
+
+  /** 单页「常用」区：沿用第一页的图标（顺序、图标皮肤、未读红点都一致）。 */
+  const favoriteIcons = useMemo<DesktopIconId[]>(() => {
+    const firstPageKey = pageKeys[0] ?? "page1";
+    return (layout[firstPageKey] ?? []).map(item => item.id);
+  }, [layout, pageKeys]);
+
+  /** 单页顶部组件区：沿用第一页的桌面组件。 */
+  const firstPageWidgets = useMemo(
+    () => widgets.filter(w => w.page === (getDesktopPageNumber(pageKeys[0] ?? "page1") || 1)),
+    [widgets, pageKeys]
+  );
+
+  /** 「应用目录」= 全部可用应用：内置图标清单 + 已装的自定义 APP。 */
+  const desktopDirectoryIcons = useMemo<DesktopIconId[]>(() => {
+    const builtin = Object.keys(ICONS) as IconId[];
+    const custom = customApps.map(app => toCustomAppIconId(app.id) as DesktopIconId);
+    return [...builtin, ...custom];
+  }, [customApps]);
+
+  /**
+   * 单页里的图标：外观与多页图标完全同款（图片图标 / 图标皮肤 / 未读红点 / 标签），
+   * 但不挂多页那套长按拖拽——单页是滚动列表，拖拽排布请切回分页桌面做。
+   */
+  function renderSingleIcon(iconId: DesktopIconId) {
+    if (isFolderIconId(iconId)) return null;
+    const icon = getDesktopIconMeta(iconId);
+    if (!icon) return null;
+    const customApp = icon.customApp;
+    const builtinIconId = customApp ? null : (icon.id as IconId);
+    const iconSkinId = activeIconSkins[iconId];
+    const iconSkinUrl = iconSkinId ? themeAssets[iconSkinId] ?? null : null;
+    const customIconUrl = customApp && customAppIconStyles[customApp.id] !== "global"
+      ? customApp.iconDataUrl ?? null
+      : null;
+    const iconImageUrl = iconSkinUrl || customIconUrl;
+    const hasImageIcon = Boolean(iconImageUrl);
+    const badgeCount = customApp ? customAppBadges[customApp.id] ?? 0 : 0;
+    return (
+      <button
+        key={iconId}
+        type="button"
+        className="icon-item"
+        onClick={() => openApp(iconId)}
+      >
+        <span
+          className={hasImageIcon ? "icon-glyph-box icon-glyph-box-skin" : "icon-glyph-box"}
+          style={hasImageIcon ? undefined : { "--icon-tone": icon.tone } as React.CSSProperties}
+          aria-hidden
+        >
+          {iconImageUrl ? (
+            <span className="icon-skin-layer" style={{ backgroundImage: `url("${iconImageUrl}")` }} />
+          ) : null}
+          {builtinIconId ? (
+            <IconGlyph
+              id={builtinIconId}
+              className={
+                builtinIconId === "music"
+                  ? iconSkinUrl
+                    ? "icon-glyph icon-glyph-music icon-glyph-hidden"
+                    : "icon-glyph icon-glyph-music"
+                  : iconSkinUrl
+                    ? "icon-glyph icon-glyph-hidden"
+                    : "icon-glyph"
+              }
+            />
+          ) : customIconUrl ? null : (
+            <CustomAppGlyph seed={customApp?.name || icon.label} className="icon-glyph" />
+          )}
+          {badgeCount > 0 ? (
+            <span className="desktop-icon-badge" aria-label={`${badgeCount} 条未读`}>
+              {badgeCount > 99 ? "99+" : badgeCount}
+            </span>
+          ) : null}
+        </span>
+        <span className="icon-label">{icon.label}</span>
+      </button>
+    );
+  }
 
   // 文件夹 tile 里的迷你图标：皮肤/自定义图标优先，否则画小号 glyph。
   // 底板样式全靠 CSS 变量，跟随图标材质调节。
@@ -4668,6 +4773,42 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
 
                 {!activeApp ? (
                   <>
+                    {desktopViewMode === "single" ? (
+                      /* ── 单页桌面：常用 → 组件 → 应用目录（含全部应用），可以一直往下滚 ── */
+                      <div className="desktop-single">
+                        <section className="ds-block">
+                          <div className="ds-block-head">
+                            <span className="ds-block-title">常用</span>
+                            <span className="ds-block-count">{favoriteIcons.length} 个</span>
+                          </div>
+                          <div className="ds-grid">
+                            {favoriteIcons.map((iconId) => renderSingleIcon(iconId))}
+                          </div>
+                        </section>
+
+                        {firstPageWidgets.length > 0 && (
+                          <section className="ds-block">
+                            <div className="icon-grid ds-widgets">
+                              {firstPageWidgets.map((widget) => (
+                                <div key={widget.id} className="widget-drag-wrap">
+                                  <WidgetRenderer widget={widget} onConfigChange={handleWidgetConfigChange} />
+                                </div>
+                              ))}
+                            </div>
+                          </section>
+                        )}
+
+                        <section className="ds-block">
+                          <div className="ds-block-head">
+                            <span className="ds-block-title">应用目录</span>
+                            <span className="ds-block-count">{desktopDirectoryIcons.length} 个</span>
+                          </div>
+                          <div className="ds-grid">
+                            {desktopDirectoryIcons.map((iconId) => renderSingleIcon(iconId))}
+                          </div>
+                        </section>
+                      </div>
+                    ) : (
                     <div
                       ref={swipeLayerRef}
                       className="phone-swipe-layer"
@@ -4860,9 +5001,10 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
                         );
                       })}
                     </div>
+                    )}
 
                     <div className="page-controls">
-                      {pageKeys.map((pageKey, pageIndex) => (
+                      {desktopViewMode === "single" ? null : pageKeys.map((pageKey, pageIndex) => (
                         <button
                           key={pageKey}
                           type="button"
@@ -4871,6 +5013,14 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
                           onClick={() => setCurrentPageIndex(pageIndex)}
                         />
                       ))}
+                      <button
+                        type="button"
+                        className="ds-mode-pill"
+                        onClick={toggleDesktopViewMode}
+                        aria-label={desktopViewMode === "single" ? "切回分页桌面" : "切换到单页桌面"}
+                      >
+                        {desktopViewMode === "single" ? "分页桌面" : "单页桌面"}
+                      </button>
                     </div>
                   </>
                 ) : (
