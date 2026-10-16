@@ -9,6 +9,7 @@ import {
   Code2,
   Download,
   LayoutGrid,
+  MonitorSmartphone,
   PaintBucket,
   Plus,
   RotateCcw,
@@ -24,7 +25,7 @@ import { GlassIcon } from "@/components/ui/glass-icon";
 import { normalizeThemeProfile, resolveActiveIconSkins, DEFAULT_THEME_PROFILE, type ThemeProfile } from "@/lib/theme-types";
 import type { DesktopIconId, IconId } from "@/lib/desktop-config";
 import { DOCK_DEFAULT, PAGE_1_DEFAULT, PAGE_2_DEFAULT, PAGE_3_DEFAULT, ICONS } from "@/lib/desktop-config";
-import type { DesktopFolderMap, DesktopIconLayout } from "@/lib/desktop-layout-storage";
+import type { DesktopFolderMap, DesktopIconLayout, DesktopViewMode } from "@/lib/desktop-layout-storage";
 import { CUSTOM_APPS_UPDATED_EVENT, loadInstalledCustomApps } from "@/lib/custom-app-storage";
 import { toCustomAppIconId, type InstalledCustomApp } from "@/lib/custom-app-types";
 import { PageShell } from "@/components/ui/page-shell";
@@ -76,6 +77,7 @@ type ThemeSection =
   | "wallpaper"
   | "icons"
   | "widgets"
+  | "desktop"
   | "case"
   | "text"
   | "css";
@@ -100,6 +102,9 @@ type PhoneThemeAppProps = {
   pageIcons: DesktopIconLayout;
   iconSkins: Record<string, string | null>;
   wallpaperStyle?: CSSProperties;
+  /** 当前主屏形态（由桌面壳注入）：paged = 多页翻页；single = 单页桌面 */
+  desktopViewMode?: DesktopViewMode;
+  onDesktopViewModeChange?: (mode: DesktopViewMode) => void;
 };
 
 function IconChevronRight() {
@@ -124,6 +129,10 @@ function IconGrid() {
 
 function IconWidgets() {
   return <AppWindow size={22} strokeWidth={1.75} />;
+}
+
+function IconDesktopMode() {
+  return <MonitorSmartphone size={22} strokeWidth={1.75} />;
 }
 
 function IconCase() {
@@ -164,6 +173,7 @@ const MENU_ITEMS: Array<{
   { section: "wallpaper", icon: IconWallpaper, label: "壁纸", desc: "桌面背景", color: BINDING_ACCENTS.api, glow: `color-mix(in srgb, ${BINDING_ACCENTS.api} 35%, transparent)`, glass: "wallpaper" },
   { section: "icons", icon: IconGrid, label: "图标", desc: "应用图标", color: BINDING_ACCENTS.regex, glow: `color-mix(in srgb, ${BINDING_ACCENTS.regex} 35%, transparent)`, glass: "icons" },
   { section: "widgets", icon: IconWidgets, label: "桌面组件", desc: "小组件", color: BINDING_ACCENTS.voice, glow: `color-mix(in srgb, ${BINDING_ACCENTS.voice} 35%, transparent)`, glass: "widgets" },
+  { section: "desktop", icon: IconDesktopMode, label: "桌面形态", desc: "单页 / 分页", color: BINDING_ACCENTS.identity, glow: `color-mix(in srgb, ${BINDING_ACCENTS.identity} 35%, transparent)`, glass: "quick-action" },
   { section: "case", icon: IconCase, label: "状态栏", color: BINDING_ACCENTS.memory, glass: "status-bar" },
   { section: "text", icon: IconText, label: "文字", color: BINDING_ACCENTS.identity, glow: `color-mix(in srgb, ${BINDING_ACCENTS.identity} 35%, transparent)`, glass: "text" },
   { section: "css", icon: IconCode, label: "CSS 变量", desc: "自定义全局样式变量", color: BINDING_ACCENTS.embedding, glow: `color-mix(in srgb, ${BINDING_ACCENTS.embedding} 35%, transparent)`, glass: "css" },
@@ -181,15 +191,67 @@ const SECTION_TITLES: Record<Exclude<ThemeSection, "menu">, string> = {
   wallpaper: "\u58C1\u7EB8",
   icons: "\u56FE\u6807",
   widgets: "\u684C\u9762\u7EC4\u4EF6",
+  desktop: "\u684C\u9762\u5F62\u6001",
   case: "\u624B\u673A\u58F3",
   text: "\u6587\u5B57",
   css: "CSS \u53D8\u91CF",
 };
 
-const THEME_SECTIONS = new Set<string>(["menu", "palette", "wallpaper", "icons", "widgets", "case", "text", "css"]);
+const THEME_SECTIONS = new Set<string>(["menu", "palette", "wallpaper", "icons", "widgets", "desktop", "case", "text", "css"]);
 
 function isThemeSection(value: string): value is ThemeSection {
   return THEME_SECTIONS.has(value);
+}
+
+/** 桌面形态：在「多页翻页桌面」和「单页桌面」之间切换。
+ *  两种形态共用同一份图标布局、桌面组件与主题，所以随时可逆、不会丢设置。 */
+function DesktopModePage({
+  value,
+  onChange,
+}: {
+  value?: DesktopViewMode;
+  onChange?: (mode: DesktopViewMode) => void;
+}) {
+  const current: DesktopViewMode = value === "single" ? "single" : "paged";
+  const options: Array<{ id: DesktopViewMode; title: string; desc: string }> = [
+    {
+      id: "paged",
+      title: "分页桌面",
+      desc: "原来的多页翻页桌面：图标分页摆放，长按可拖拽排布、合并成文件夹。",
+    },
+    {
+      id: "single",
+      title: "单页桌面",
+      desc: "一页装下：上面是常用图标，全部应用收在右下角按钮里，点开是整页应用目录。",
+    },
+  ];
+
+  return (
+    <div className="flex-1 overflow-y-auto px-4 pb-8">
+      <div className="flex flex-col gap-3">
+        {options.map((option) => {
+          const active = current === option.id;
+          return (
+            <button
+              key={option.id}
+              type="button"
+              onClick={() => onChange?.(option.id)}
+              className={`w-full rounded-2xl border px-4 py-4 text-left transition active:scale-[0.98] ${active ? "border-[var(--c-icon-active)]" : "border-[var(--c-card-border)]"} bg-[var(--c-card)]`}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <span className="ts-14 font-semibold text-[var(--c-text-title)]">{option.title}</span>
+                {active ? <CheckCircle2 size={18} className="shrink-0 text-[var(--c-icon-active)]" /> : null}
+              </div>
+              <p className="mt-1 ts-11 leading-relaxed text-[var(--c-icon)]">{option.desc}</p>
+            </button>
+          );
+        })}
+      </div>
+      <p className="mt-4 ts-11 leading-relaxed text-[var(--c-icon)]">
+        切换不会影响图标位置、桌面组件和主题，也不会动任何数据，随时可以切回来。
+      </p>
+    </div>
+  );
 }
 
 export function PhoneThemeApp({
@@ -204,6 +266,8 @@ export function PhoneThemeApp({
   pageIcons,
   iconSkins,
   wallpaperStyle,
+  desktopViewMode,
+  onDesktopViewModeChange,
 }: PhoneThemeAppProps) {
   const [section, setSection] = useState<ThemeSection>(() => {
     if (typeof window !== "undefined") {
@@ -366,7 +430,7 @@ export function PhoneThemeApp({
             <div>
               <h3 className="appearance-menu-section-title">Appearance</h3>
               <div className="card-grid mt-2.5">
-                {MENU_ITEMS.filter(item => ["palette", "wallpaper", "icons", "widgets"].includes(item.section)).map((item) => (
+                {MENU_ITEMS.filter(item => ["palette", "wallpaper", "icons", "widgets", "desktop"].includes(item.section)).map((item) => (
                   <button
                     key={item.section}
                     className="app-card card-card"
@@ -536,6 +600,11 @@ export function PhoneThemeApp({
             pageIcons={pageIcons}
             iconSkins={iconSkins}
             wallpaperStyle={wallpaperStyle}
+          />
+        ) : section === "desktop" ? (
+          <DesktopModePage
+            value={desktopViewMode}
+            onChange={onDesktopViewModeChange}
           />
         ) : section === "palette" ? (
           <PalettePresetPage draft={draft} onDraftChange={onDraftChange} onApply={onApply} onNotice={onNotice} />
