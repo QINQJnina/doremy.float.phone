@@ -1,7 +1,7 @@
 import { DOCK_DEFAULT, ICONS, PAGE_1_DEFAULT, PAGE_2_DEFAULT, PAGE_3_DEFAULT, type DesktopIconId, type IconId, type IconPosition } from "@/lib/desktop-config";
 import { isCustomAppIconId } from "@/lib/custom-app-types";
 import { loadInstalledCustomApps } from "@/lib/custom-app-storage";
-import { GRID_COLS, GRID_ROWS, WIDGET_SIZE_CELLS, type WidgetInstance } from "@/lib/widget-types";
+import { GRID_COLS, GRID_ROWS, WIDGET_SIZE_CELLS, type WidgetInstance, type WidgetSize } from "@/lib/widget-types";
 import { kvGet, kvSet, registerKvMigration } from "./kv-db";
 
 export const ICON_LAYOUT_STORAGE_KEY = "ai_phone_icon_layout_v2";
@@ -423,4 +423,51 @@ export function loadSingleWidgets(): string[] | null {
 
 export function writeSingleWidgets(types: string[]): void {
   kvSet(SINGLE_WIDGETS_STORAGE_KEY, JSON.stringify(types));
+}
+
+// 单页组件的尺寸覆盖与「是否显示组件名」开关。
+// 尺寸用「类型 → 尺寸」的映射单独存，不动上面那份字符串清单——
+// 这样已经存过的清单不用迁移，缺尺寸的项回落到该组件的推荐尺寸。
+
+export const SINGLE_WIDGET_SIZES_STORAGE_KEY = "ai_phone_single_widget_sizes_v1";
+export const SINGLE_WIDGET_LABELS_STORAGE_KEY = "ai_phone_single_widget_labels_v1";
+
+registerKvMigration(SINGLE_WIDGET_SIZES_STORAGE_KEY);
+registerKvMigration(SINGLE_WIDGET_LABELS_STORAGE_KEY);
+
+export function loadSingleWidgetSizes(): Record<string, WidgetSize> {
+  const raw = kvGet(SINGLE_WIDGET_SIZES_STORAGE_KEY);
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const valid = new Set(Object.keys(WIDGET_SIZE_CELLS));
+    const result: Record<string, WidgetSize> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof value !== "string" || !valid.has(value)) continue;
+      result[key] = value as WidgetSize;
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+export function writeSingleWidgetSizes(sizes: Record<string, WidgetSize>): void {
+  kvSet(SINGLE_WIDGET_SIZES_STORAGE_KEY, JSON.stringify(sizes));
+}
+
+/** 单页组件下面那行名称是否显示。默认显示（保持与多页一致，不做意外改动）。 */
+export function loadSingleWidgetLabelsVisible(): boolean {
+  const raw = kvGet(SINGLE_WIDGET_LABELS_STORAGE_KEY);
+  if (raw == null) return true;
+  try {
+    return JSON.parse(raw) !== false;
+  } catch {
+    return raw !== "false";
+  }
+}
+
+export function writeSingleWidgetLabelsVisible(visible: boolean): void {
+  kvSet(SINGLE_WIDGET_LABELS_STORAGE_KEY, JSON.stringify(visible));
 }

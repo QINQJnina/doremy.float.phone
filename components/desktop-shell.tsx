@@ -104,7 +104,7 @@ import {
   resolveActiveIconSkins,
   type ThemeProfile
 } from "@/lib/theme-types";
-import { GRID_COLS, GRID_ROWS, WIDGET_SIZE_CELLS, WIDGET_CATALOG, resolveSingleWidgetSize, DEFAULT_SINGLE_PAGE_WIDGETS, type WidgetInstance, type WidgetType } from "@/lib/widget-types";
+import { GRID_COLS, GRID_ROWS, WIDGET_SIZE_CELLS, WIDGET_CATALOG, resolveSingleWidgetSize, DEFAULT_SINGLE_PAGE_WIDGETS, type WidgetInstance, type WidgetType, type WidgetSize } from "@/lib/widget-types";
 import { buildOccupancyGrid, canPlaceWidget, placeWidget, createDefaultWidgets, loadWidgets, saveWidgets, loadDIYTemplates, saveDIYTemplates } from "@/lib/widget-storage";
 import {
   createDefaultDesktopIconLayout,
@@ -122,6 +122,10 @@ import {
   writeSingleFavorites,
   loadSingleWidgets,
   writeSingleWidgets,
+  loadSingleWidgetSizes,
+  writeSingleWidgetSizes,
+  loadSingleWidgetLabelsVisible,
+  writeSingleWidgetLabelsVisible,
   loadDesktopFolders,
   writeDesktopFolders,
   DOCK_LAYOUT_STORAGE_KEY,
@@ -1168,6 +1172,10 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
   // 装新应用不会自动进常用；改这两份清单都不影响多页桌面。
   const [singleFavorites, setSingleFavorites] = useState<DesktopIconId[]>([]);
   const [singleWidgets, setSingleWidgets] = useState<string[]>([]);
+  // 组件尺寸覆盖（类型 → 尺寸）；缺省项回落到该组件的推荐尺寸
+  const [singleWidgetSizes, setSingleWidgetSizes] = useState<Record<string, WidgetSize>>({});
+  // 组件下面那行名称是否显示
+  const [singleWidgetLabels, setSingleWidgetLabels] = useState(true);
   const singleContentReadyRef = useRef(false);
   // 桌面文件夹：tile 在 layout 里占格子，这张表管名字和成员
   const [folders, setFolders] = useState<DesktopFolderMap>({});
@@ -2353,6 +2361,19 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
     writeSingleWidgets(types);
   }, []);
 
+  const handleSingleWidgetSizeChange = useCallback((type: string, size: WidgetSize) => {
+    setSingleWidgetSizes(prev => {
+      const next = { ...prev, [type]: size };
+      writeSingleWidgetSizes(next);
+      return next;
+    });
+  }, []);
+
+  const handleSingleWidgetLabelsChange = useCallback((visible: boolean) => {
+    setSingleWidgetLabels(visible);
+    writeSingleWidgetLabelsVisible(visible);
+  }, []);
+
   /** 单页组件：只按「单页组件清单」渲染，位置信息不参与——单页是流式排布。
    *  不套卡片：组件自带尺寸（2x2 / 2x4）正是版式上「一格 / 两格 / 一排」的来源，
    *  再包一层卡会把两层玻璃叠在一起。 */
@@ -2360,9 +2381,10 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
     // 用户自制的 DIY 组件不在标准目录里，尺寸得从模板读
     const diyTemplates = singleWidgets.some((type) => type.startsWith("diy-")) ? loadDIYTemplates() : [];
     return singleWidgets.map((type, index) => {
+      // DIY 组件（用户自制）保留模板自带尺寸；标准组件允许用户在主题里覆盖尺寸
       const size = type.startsWith("diy-")
         ? (diyTemplates.find((item) => item.id === type)?.size ?? "2x2")
-        : resolveSingleWidgetSize(type);
+        : (singleWidgetSizes[type] ?? resolveSingleWidgetSize(type));
       return {
         id: `single-${type}`,
         type,
@@ -2372,7 +2394,7 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
         col: 1 + index,
       } as WidgetInstance;
     });
-  }, [singleWidgets]);
+  }, [singleWidgets, singleWidgetSizes]);
 
   // 单页内容首次水合：从没设置过时用出厂默认
   // （常用 = 第一页现有图标；组件 = 大时钟 / 日历 / AI 助手）。只跑一次。
@@ -2383,6 +2405,8 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
     const storedWidgets = loadSingleWidgets();
     setSingleFavorites(storedFavorites ?? (layout.page1 ?? []).map(item => item.id));
     setSingleWidgets(storedWidgets ?? DEFAULT_SINGLE_PAGE_WIDGETS);
+    setSingleWidgetSizes(loadSingleWidgetSizes());
+    setSingleWidgetLabels(loadSingleWidgetLabelsVisible());
   }, [desktopReady, layout]);
 
   /** 应用目录：按「我的应用 / 内置应用」分组，并支持按名称搜索。 */
@@ -4383,6 +4407,10 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
           onToggleSingleFavorite={toggleSingleFavorite}
           singleWidgets={singleWidgets}
           onSingleWidgetsChange={handleSingleWidgetsChange}
+          singleWidgetSizes={singleWidgetSizes}
+          onSingleWidgetSizeChange={handleSingleWidgetSizeChange}
+          singleWidgetLabels={singleWidgetLabels}
+          onSingleWidgetLabelsChange={handleSingleWidgetLabelsChange}
         />
       );
     }
@@ -4903,7 +4931,7 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
                       /* ── 单页桌面：组件在上（按自身尺寸排布），常用在下，
                             用设置 / 外观 App 同款的卡片网格（CardGrid）── */
                       <>
-                        <div className="desktop-single">
+                        <div className={singleWidgetLabels ? "desktop-single" : "desktop-single ds-hide-labels"}>
                           {/* 组件在上、常用在下 */}
                           {singlePageWidgets.length > 0 && (
                             <div className="icon-grid ds-widget-row">
