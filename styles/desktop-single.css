@@ -375,3 +375,42 @@
   font-size: calc(12px*var(--app-text-scale,1));
   color: var(--c-icon, #a0a3a8);
 }
+
+/* ══ 单页「常用」：复用设置 / 外观 App 的卡片（.card-grid / .card-card）══
+   版式直接来自那套类，这里只做两处桌面必需的覆盖。 */
+
+.desktop-single .card-grid {
+  margin-top: 0;
+}
+
+/* .card-card 自带 opacity:0 + 450ms 入场动画（靠 animation-fill 收尾到可见）。
+   桌面上每次重渲染都会重播，且动画一旦不跑就会留下"看不见的卡片"。
+   这里统一关掉动画并显式给足不透明度，行为确定。
+   卡片底色显式写成 --c-card，与设置 / 外观页的卡片是同一个颜色来源。 */
+.desktop-single .card-card {
+  animation: none;
+  opacity: 1;
+  background: var(--c-card, rgba(255, 255, 255, 0.7));
+}
+
+/* 卡片左下角的圆形图标底：应用图标要裁进圆里 */
+.desktop-single .card-card .card-icon {
+  position: relative;
+  overflow: hidden;
+}
+
+/* 有图标皮肤 / 自定义图标时，图片铺满圆形底 */
+.ds-card-icon-img {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background-size: cover;
+  background-position: center;
+}
+
+/* glyph 缩到圆形底里合适的大小，并跟随主题文字色 */
+.desktop-single .card-card .card-icon .ds-card-icon-glyph {
+  width: 22px;
+  height: 22px;
+  color: var(--c-text-title);
+}

@@ -131,6 +131,7 @@ import {
   type DesktopPageKey,
 } from "@/lib/desktop-layout-storage";
 import { WidgetRenderer } from "@/components/widgets/widget-renderer";
+import { CardGrid } from "@/components/ui/card-grid";
 import type { DIYWidgetTemplate } from "@/lib/widget-types";
 import { DebugPromptPanel } from "@/components/debug-prompt-panel";
 import { QuickActionFloat } from "@/components/quick-action-float";
@@ -2460,6 +2461,29 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
         <span className="icon-label">{icon.label}</span>
       </button>
     );
+  }
+
+  /**
+   * 单页「常用」卡片里的图标（画在卡片左下角那个圆形底色上，即 .card-icon 内）。
+   * 有图标皮肤 / 自定义图标的显示图片，否则画 glyph——和设置、外观 App 的卡片图标同一位置。
+   */
+  function renderCardIconNode(iconId: DesktopIconId) {
+    const meta = getDesktopIconMeta(iconId);
+    if (!meta) return null;
+    const customApp = meta.customApp;
+    const skinId = activeIconSkins[iconId];
+    const skinUrl = skinId ? themeAssets[skinId] ?? null : null;
+    const customUrl = customApp && customAppIconStyles[customApp.id] !== "global"
+      ? customApp.iconDataUrl ?? null
+      : null;
+    const imageUrl = skinUrl || customUrl;
+    if (imageUrl) {
+      return <span className="ds-card-icon-img" style={{ backgroundImage: `url("${imageUrl}")` }} />;
+    }
+    if (customApp) {
+      return <CustomAppGlyph seed={customApp.name} className="ds-card-icon-glyph" />;
+    }
+    return <IconGlyph id={iconId as IconId} className="ds-card-icon-glyph" />;
   }
 
   /**
@@ -4875,7 +4899,8 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
                 {!activeApp ? (
                   <>
                     {desktopViewMode === "single" ? (
-                      /* ── 单页桌面：卡片化分组。常用收进一张卡，组件按自身尺寸自然排布 ── */
+                      /* ── 单页桌面：组件在上（按自身尺寸排布），常用在下，
+                            用设置 / 外观 App 同款的卡片网格（CardGrid）── */
                       <>
                         <div className="desktop-single">
                           {/* 组件在上、常用在下 */}
@@ -4889,14 +4914,24 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
                             </div>
                           )}
 
-                          <section className="ds-card">
-                            <div className="ds-card-head">
-                              <span className="ds-card-title">常用</span>
-                            </div>
-                            <div className="ds-grid">
-                              {favoriteIcons.map((iconId) => renderSingleIcon(iconId))}
-                            </div>
-                          </section>
+                          {/* 「常用」复用设置 / 外观 App 的同一套卡片（CardGrid），
+                              所以版式与那两处完全一致：小标题 + 两列卡片（图标 + 名称 + 右箭头）。 */}
+                          <CardGrid
+                            label="常用"
+                            labelClassName="appearance-menu-section-title"
+                            items={favoriteIcons
+                              .filter((iconId) => Boolean(getDesktopIconMeta(iconId)))
+                              .map((iconId) => {
+                                const meta = getDesktopIconMeta(iconId)!;
+                                return {
+                                  id: iconId,
+                                  label: meta.label,
+                                  iconColor: meta.tone,
+                                  iconNode: renderCardIconNode(iconId),
+                                  onClick: () => { setShowAppDirectory(false); openApp(iconId); },
+                                };
+                              })}
+                          />
                         </div>
                         {/* 应用目录的唯一入口：右下角悬浮钮 */}
                         {!showAppDirectory && (
