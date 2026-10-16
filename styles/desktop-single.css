@@ -8,7 +8,12 @@
    ⚠️ 两个滚动容器（.desktop-single / .ds-dir-scroll）一律用「块级流 + 外边距」排布，
    不用 flex 列布局：卡片自身是 overflow:hidden，而 overflow 不为 visible 时
    flex 子项的 min-height:auto 会解析为 0，卡片会被压扁到容器高度、
-   既不溢出也不滚动，内容就"看不见"了。 */
+   既不溢出也不滚动，内容就"看不见"了。
+
+   ⚠️ 滚动性能：毛玻璃（backdrop-filter）在本文件里被刻意收敛。
+   嵌套模糊（整页糊 + 卡糊 + 每个图标糊）会让滚动每帧重新采样几十层，
+   是掉帧的主因。下面的做法是：整页底色改为近乎不透明、去掉整页/卡片的模糊，
+   并把图标模糊半径从 22px 压到 5px —— 背后本来就已经是糊的，观感几乎无差别。 */
 
 .desktop-single {
   flex: 1 1 auto;
@@ -100,6 +105,15 @@
   min-height: 72px;
 }
 
+/* 滚动性能：毛玻璃态下每个图标自身都带 22px 模糊，一屏几十个图标同时重新采样，
+   手指划动时就会明显掉帧。单页与目录里把模糊半径压到 5px ——
+   背后本来就已经是糊的，肉眼几乎看不出差别，但滚动会顺很多。 */
+.phone-shell[data-icon-effect="glass"] .desktop-single .icon-glyph-box,
+.phone-shell[data-icon-effect="glass"] .ds-directory .icon-glyph-box {
+  backdrop-filter: blur(5px) saturate(140%);
+  -webkit-backdrop-filter: blur(5px) saturate(140%);
+}
+
 /* ══ 桌面组件：按自身尺寸自然排布（2x2 占一列、2x4 占满一行……）══
    复用 .icon-grid 只是为了继承它的格子尺寸变量，布局本身改成流式换行。 */
 
@@ -169,15 +183,23 @@
   flex-direction: column;
   padding: calc(var(--status-bar-height, 36px) + 12px) 14px 18px;
   overflow: hidden;
-  background: color-mix(in srgb, var(--c-page-body-bg, #f1f2f6) 94%, transparent);
-  backdrop-filter: blur(22px) saturate(150%);
-  -webkit-backdrop-filter: blur(22px) saturate(150%);
+  /* 几乎不透明，且刻意不用 backdrop-filter：
+     目录整页本来就是独立页面，透出桌面没有意义；而整页模糊会和卡内每个图标的
+     模糊形成"嵌套模糊"，滚动时每帧都要重新采样，是掉帧的主因。 */
+  background: color-mix(in srgb, var(--c-page-body-bg, #f1f2f6) 99%, transparent);
   animation: dsDirectoryIn 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  contain: paint;
 }
 
 @keyframes dsDirectoryIn {
   from { opacity: 0; transform: translateY(14px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+/* 目录里的卡片：底下已经是近乎不透明的整页底色，再叠加模糊看不出差别，只会白耗性能 */
+.phone-shell[data-widget-effect="glass"] .ds-directory .ds-card {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 .ds-dir-head {
