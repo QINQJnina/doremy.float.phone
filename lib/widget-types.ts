@@ -139,23 +139,28 @@ export const GRID_ROWS = 6;
 export const GRID_COLS = 4;
 
 /**
- * 单页桌面可选的组件：只列标准组件里"开箱即用、不需要额外配置"的几个，并附带推荐尺寸。
- * 单页桌面按这份清单渲染，**不会**动多页桌面的组件位置——两边各自独立。
+ * 单页组件的推荐尺寸：以组件目录的推荐值为准。
+ * 日历是例外——2x2 里要塞 7 行（星期表头 + 最多 6 周日期），扣掉上下留白每行只剩约 11px，
+ * 而日期字号是 9px，行距几乎为零。单页给它 3x2（宽度不变、多一格行高），每行约 21px。
  */
-export const SINGLE_PAGE_WIDGET_OPTIONS: Array<{
-  type: WidgetType;
-  name: string;
-  size: WidgetSize;
-  desc: string;
-}> = [
-  { type: "largeTime", name: "数字大时钟", size: "2x4", desc: "大字时间与日期" },
-  { type: "clock", name: "时钟 + 日期", size: "2x2", desc: "紧凑时间与星期" },
-  { type: "calendar", name: "日历", size: "2x2", desc: "月视图，高亮今天" },
-  { type: "mascot", name: "AI 助手", size: "2x2", desc: "桌宠，点击召唤" },
-  { type: "loveNote", name: "情话便签", size: "2x2", desc: "随机一句甜话" },
-  { type: "moodPill", name: "心情气泡", size: "1x4", desc: "浮动心情标签" },
-  { type: "music", name: "音乐播放器", size: "2x4", desc: "封面与播放控制" },
-];
+export function resolveSingleWidgetSize(type: string): WidgetSize {
+  if (type === "calendar") return "3x2";
+  const entry = WIDGET_CATALOG.find((item) => item.type === type);
+  return entry?.size ?? "2x2";
+}
+
+/**
+ * 单页可选的组件：直接开放完整目录（标准组件 + 自由艺术），不再只给手挑的几个。
+ * 单页按这份清单渲染，**不会**动多页桌面的组件位置——两边各自独立。
+ * 用户自制的 DIY 组件由调用方在运行时追加（见主题 App 的「桌面形态」页）。
+ */
+export const SINGLE_PAGE_WIDGET_CATALOG = WIDGET_CATALOG.map((entry) => ({
+  type: entry.type as string,
+  name: entry.name,
+  desc: entry.desc,
+  size: resolveSingleWidgetSize(entry.type),
+  freestyle: entry.track === "freestyle",
+}));
 
 /** 单页桌面组件的出厂默认：大时钟 + 日历 + AI 助手 */
 export const DEFAULT_SINGLE_PAGE_WIDGETS: WidgetType[] = ["largeTime", "calendar", "mascot"];

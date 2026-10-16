@@ -37,6 +37,12 @@
   margin-top: 12px;
 }
 
+/* 组件下面那行名称（.widget-label 由组件渲染器输出）在单页里可以关掉：
+   仪表盘式版面里它读起来像说明文字。默认仍显示，由「主题 → 桌面形态」里的开关决定。 */
+.desktop-single.ds-hide-labels .widget-label {
+  display: none;
+}
+
 /* ══ 卡片本体 ══ */
 
 .ds-card {
