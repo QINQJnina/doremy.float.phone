@@ -3,7 +3,12 @@
    多页桌面（.phone-swipe-layer / .icon-grid 原样式）完全不受影响。
 
    卡片材质刻意与「桌面组件」的玻璃卡保持一致（同样的渐变 / 模糊 / 高光 / 阴影），
-   所以换主题色、换壁纸、切「扁平纯色 / 毛玻璃态」时，卡片会跟着一起变。 */
+   所以换主题色、换壁纸、切「扁平纯色 / 毛玻璃态」时，卡片会跟着一起变。
+
+   ⚠️ 两个滚动容器（.desktop-single / .ds-dir-scroll）一律用「块级流 + 外边距」排布，
+   不用 flex 列布局：卡片自身是 overflow:hidden，而 overflow 不为 visible 时
+   flex 子项的 min-height:auto 会解析为 0，卡片会被压扁到容器高度、
+   既不溢出也不滚动，内容就"看不见"了。 */
 
 .desktop-single {
   flex: 1 1 auto;
@@ -14,15 +19,17 @@
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   touch-action: pan-y;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+  display: block;
   padding: 8px 12px 96px; /* 底部留白：别让最后一行被右下角悬浮钮压住 */
   scrollbar-width: none;
 }
 
 .desktop-single::-webkit-scrollbar {
   display: none;
+}
+
+.desktop-single > * + * {
+  margin-top: 12px;
 }
 
 /* ══ 卡片本体 ══ */
@@ -76,25 +83,6 @@
   font-weight: 700;
   letter-spacing: 0.08em;
   color: var(--c-home-text, rgba(0, 0, 0, 0.65));
-}
-
-.ds-card-more {
-  appearance: none;
-  -webkit-appearance: none;
-  border: 0;
-  background: transparent;
-  padding: 2px 4px;
-  font: inherit;
-  font-size: calc(11px*var(--app-text-scale,1));
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--c-home-pink, var(--c-icon-active, #8c7ae6));
-  cursor: pointer;
-  transition: opacity 0.15s ease;
-}
-
-.ds-card-more:active {
-  opacity: 0.55;
 }
 
 /* ══ 卡片内图标网格：四列、按行向下排 ══ */
@@ -278,7 +266,7 @@
   cursor: pointer;
 }
 
-/* ── 分组滚动区 ── */
+/* ── 分组滚动区（块级流，见文件头说明） ── */
 
 .ds-dir-scroll {
   flex: 1 1 auto;
@@ -287,9 +275,7 @@
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+  display: block;
   padding: 2px 0 8px;
 }
 
@@ -299,6 +285,10 @@
 
 .ds-dir-group {
   padding: 12px 10px 14px;
+}
+
+.ds-dir-group + .ds-dir-group {
+  margin-top: 12px;
 }
 
 .ds-dir-group-head {

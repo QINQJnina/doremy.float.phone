@@ -4805,13 +4805,6 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
                           <section className="ds-card">
                             <div className="ds-card-head">
                               <span className="ds-card-title">常用</span>
-                              <button
-                                type="button"
-                                className="ds-card-more"
-                                onClick={openAppDirectory}
-                              >
-                                全部 ›
-                              </button>
                             </div>
                             <div className="ds-grid">
                               {favoriteIcons.map((iconId) => renderSingleIcon(iconId))}
@@ -4828,6 +4821,7 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
                             </div>
                           )}
                         </div>
+                        {/* 应用目录的唯一入口：右下角悬浮钮 */}
                         {!showAppDirectory && (
                           <button
                             type="button"
@@ -5389,7 +5383,7 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
                   clone keeps theme variables + glass effect selectors
                   (.phone-shell[data-icon-effect] etc.); follows pointer via ref */}
               {/* 应用目录：单页桌面里点右下角按钮展开的一整页全屏清单（分组 + 搜索）。
-                  铺满手机屏幕并盖住底栏，头部与搜索框固定，分组各自独立滚动。 */}
+                  铺满手机屏幕并盖住底栏，头部与搜索框固定，分组区独立滚动。 */}
               {desktopViewMode === "single" && showAppDirectory && !activeApp ? (
                 <div className="ds-directory" role="dialog" aria-modal="true" aria-label="应用目录">
                   <div className="ds-dir-head">
