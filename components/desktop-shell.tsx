@@ -1155,6 +1155,8 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
   // 主屏形态：paged = 原来的多页翻页桌面；single = 单页桌面（常用 + 应用目录）。
   // 只改变"怎么摆"，图标布局 / 组件位置 / 主题都不动，两者随时互相切换。
   const [desktopViewMode, setDesktopViewMode] = useState<DesktopViewMode>("paged");
+  // 单页桌面里「应用目录」全屏页是否展开（多页形态不用它）
+  const [showAppDirectory, setShowAppDirectory] = useState(false);
   // 桌面文件夹：tile 在 layout 里占格子，这张表管名字和成员
   const [folders, setFolders] = useState<DesktopFolderMap>({});
   const [openFolderId, setOpenFolderId] = useState<string | null>(null);
@@ -2305,12 +2307,13 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
     });
   }, []);
 
-  // 单页形态是滚动列表、不做拖拽排布：进入单页时自动退出编辑态，
-  // 否则编辑态的抖动动画和「添加/装扮」按钮会挂在单页上。
+  // 单页是滚动列表、不做拖拽排布：进入单页时退出编辑态；离开单页时收起应用目录。
   useEffect(() => {
-    if (desktopViewMode === "single" && editMode) {
-      exitEditMode();
+    if (desktopViewMode !== "single") {
+      setShowAppDirectory(false);
+      return;
     }
+    if (editMode) exitEditMode();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [desktopViewMode, editMode]);
 
@@ -2334,8 +2337,8 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
   }, [customApps]);
 
   /**
-   * 单页里的图标：外观与多页图标完全同款（图片图标 / 图标皮肤 / 未读红点 / 标签），
-   * 但不挂多页那套长按拖拽——单页是滚动列表，拖拽排布请切回分页桌面做。
+   * 单页与目录页里的图标：外观与多页图标完全同款（图标皮肤 / 图片图标 / 未读红点 / 标签），
+   * 但不挂多页那套长按拖拽——这两处都是列表，拖拽排布请切回分页桌面做。
    */
   function renderSingleIcon(iconId: DesktopIconId) {
     if (isFolderIconId(iconId)) return null;
@@ -2356,7 +2359,7 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
         key={iconId}
         type="button"
         className="icon-item"
-        onClick={() => openApp(iconId)}
+        onClick={() => { setShowAppDirectory(false); openApp(iconId); }}
       >
         <span
           className={hasImageIcon ? "icon-glyph-box icon-glyph-box-skin" : "icon-glyph-box"}
@@ -4774,40 +4777,43 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
                 {!activeApp ? (
                   <>
                     {desktopViewMode === "single" ? (
-                      /* ── 单页桌面：常用 → 组件 → 应用目录（含全部应用），可以一直往下滚 ── */
-                      <div className="desktop-single">
-                        <section className="ds-block">
-                          <div className="ds-block-head">
-                            <span className="ds-block-title">常用</span>
-                            <span className="ds-block-count">{favoriteIcons.length} 个</span>
-                          </div>
-                          <div className="ds-grid">
-                            {favoriteIcons.map((iconId) => renderSingleIcon(iconId))}
-                          </div>
-                        </section>
-
-                        {firstPageWidgets.length > 0 && (
+                      /* ── 单页桌面：上面「常用」+ 组件；全部应用收在下面「应用目录」按钮后 ── */
+                      <>
+                        <div className="desktop-single">
                           <section className="ds-block">
-                            <div className="icon-grid ds-widgets">
-                              {firstPageWidgets.map((widget) => (
-                                <div key={widget.id} className="widget-drag-wrap">
-                                  <WidgetRenderer widget={widget} onConfigChange={handleWidgetConfigChange} />
-                                </div>
-                              ))}
+                            <div className="ds-block-head">
+                              <span className="ds-block-title">常用</span>
+                              <span className="ds-block-count">{favoriteIcons.length} 个</span>
+                            </div>
+                            <div className="ds-grid">
+                              {favoriteIcons.map((iconId) => renderSingleIcon(iconId))}
                             </div>
                           </section>
-                        )}
 
-                        <section className="ds-block">
-                          <div className="ds-block-head">
-                            <span className="ds-block-title">应用目录</span>
-                            <span className="ds-block-count">{desktopDirectoryIcons.length} 个</span>
-                          </div>
-                          <div className="ds-grid">
-                            {desktopDirectoryIcons.map((iconId) => renderSingleIcon(iconId))}
-                          </div>
-                        </section>
-                      </div>
+                          {firstPageWidgets.length > 0 && (
+                            <section className="ds-block">
+                              <div className="icon-grid ds-widgets">
+                                {firstPageWidgets.map((widget) => (
+                                  <div key={widget.id} className="widget-drag-wrap">
+                                    <WidgetRenderer widget={widget} onConfigChange={handleWidgetConfigChange} />
+                                  </div>
+                                ))}
+                              </div>
+                            </section>
+                          )}
+                        </div>
+                        <div className="ds-dir-launch">
+                          <button
+                            type="button"
+                            className="ds-dir-btn"
+                            onClick={() => setShowAppDirectory(true)}
+                            aria-label="打开应用目录"
+                          >
+                            <span className="ds-dir-btn-glyph" aria-hidden>✦</span>
+                            应用目录
+                          </button>
+                        </div>
+                      </>
                     ) : (
                     <div
                       ref={swipeLayerRef}
@@ -5364,6 +5370,29 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
               {/* Drag ghost — absolutely positioned INSIDE .phone-shell so the
                   clone keeps theme variables + glass effect selectors
                   (.phone-shell[data-icon-effect] etc.); follows pointer via ref */}
+              {/* 应用目录：单页桌面里点「应用目录」按钮展开的一整页全屏清单。
+                  铺满手机屏幕并盖住底栏，头部固定、网格独立滚动。 */}
+              {desktopViewMode === "single" && showAppDirectory && !activeApp ? (
+                <div className="ds-directory" role="dialog" aria-modal="true" aria-label="应用目录">
+                  <div className="ds-dir-head">
+                    <span className="ds-dir-title">应用目录</span>
+                    <button
+                      type="button"
+                      className="ds-dir-close"
+                      onClick={() => setShowAppDirectory(false)}
+                      aria-label="关闭应用目录"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <div className="ds-dir-scroll">
+                    <div className="ds-grid ds-dir-grid">
+                      {desktopDirectoryIcons.map((iconId) => renderSingleIcon(iconId))}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
               <div ref={ghostRef} className="drag-ghost" />
             </div>
           </div>
