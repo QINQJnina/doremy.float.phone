@@ -342,8 +342,8 @@ export function writeDockLayout(dock: DesktopIconId[]): DesktopIconId[] {
 // 主屏的两种形态，只影响"怎么摆"，不影响图标布局 / 组件位置 / 主题：
 //   paged  = 原来的多页翻页桌面（保持原样，一行都不改）
 //   single = 单页桌面：上半是「常用」（沿用第一页的图标），
-//            全部应用收在「应用目录」按钮后，点开是一整页全屏清单。
-// 两者随时互相切换，切换只写这一个键。
+//            全部应用收在右下角「应用目录」按钮后，点开是一整页全屏清单。
+// 两者随时互相切换，切换只写这一个键。入口在「主题 App → 桌面形态」。
 
 export const DESKTOP_VIEW_MODE_STORAGE_KEY = "ai_phone_desktop_view_mode_v1";
 

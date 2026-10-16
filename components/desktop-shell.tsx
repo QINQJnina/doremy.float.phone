@@ -1153,7 +1153,7 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
   // Dock is an ordered icon-id list (max DOCK_MAX), kept disjoint from `layout`.
   const [dock, setDock] = useState<DesktopIconId[]>(DOCK_DEFAULT);
   // 主屏形态：paged = 原来的多页翻页桌面；single = 单页桌面（常用 + 应用目录）。
-  // 只改变"怎么摆"，图标布局 / 组件位置 / 主题都不动，两者随时互相切换。
+  // 只改变"怎么摆"，图标布局 / 组件位置 / 主题都不动，切换入口在「主题 → 桌面形态」。
   const [desktopViewMode, setDesktopViewMode] = useState<DesktopViewMode>("paged");
   // 单页桌面里「应用目录」全屏页是否展开（多页形态不用它）
   const [showAppDirectory, setShowAppDirectory] = useState(false);
@@ -2299,12 +2299,10 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
 
   // ── 单页桌面 / 多页桌面 ──────────────────────────────
   // 两者共用同一份图标布局、组件、主题，切换只是换一种摆法并记一个键。
-  const toggleDesktopViewMode = useCallback(() => {
-    setDesktopViewMode(prev => {
-      const next: DesktopViewMode = prev === "single" ? "paged" : "single";
-      writeDesktopViewMode(next);
-      return next;
-    });
+  // 入口收在「主题 App → 桌面形态」，桌面底部不放假按钮，免得和翻页圆点挤在一行。
+  const handleDesktopViewModeChange = useCallback((mode: DesktopViewMode) => {
+    setDesktopViewMode(mode);
+    writeDesktopViewMode(mode);
   }, []);
 
   // 单页是滚动列表、不做拖拽排布：进入单页时退出编辑态；离开单页时收起应用目录。
@@ -4260,6 +4258,8 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
           pageIcons={layout}
           iconSkins={iconSkinUrls}
           wallpaperStyle={wallpaperStyle}
+          desktopViewMode={desktopViewMode}
+          onDesktopViewModeChange={handleDesktopViewModeChange}
         />
       );
     }
@@ -4777,7 +4777,7 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
                 {!activeApp ? (
                   <>
                     {desktopViewMode === "single" ? (
-                      /* ── 单页桌面：上面「常用」+ 组件；全部应用收在下面「应用目录」按钮后 ── */
+                      /* ── 单页桌面：上面「常用」+ 组件；全部应用收在右下角「应用目录」按钮后 ── */
                       <>
                         <div className="desktop-single">
                           <section className="ds-block">
@@ -4802,17 +4802,17 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
                             </section>
                           )}
                         </div>
-                        <div className="ds-dir-launch">
+                        {!showAppDirectory && (
                           <button
                             type="button"
-                            className="ds-dir-btn"
+                            className="ds-dir-fab"
                             onClick={() => setShowAppDirectory(true)}
                             aria-label="打开应用目录"
+                            title="应用目录"
                           >
-                            <span className="ds-dir-btn-glyph" aria-hidden>✦</span>
-                            应用目录
+                            <span className="ds-dir-fab-glyph" aria-hidden>✦</span>
                           </button>
-                        </div>
+                        )}
                       </>
                     ) : (
                     <div
@@ -5019,14 +5019,6 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
                           onClick={() => setCurrentPageIndex(pageIndex)}
                         />
                       ))}
-                      <button
-                        type="button"
-                        className="ds-mode-pill"
-                        onClick={toggleDesktopViewMode}
-                        aria-label={desktopViewMode === "single" ? "切回分页桌面" : "切换到单页桌面"}
-                      >
-                        {desktopViewMode === "single" ? "分页桌面" : "单页桌面"}
-                      </button>
                     </div>
                   </>
                 ) : (
@@ -5370,7 +5362,7 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
               {/* Drag ghost — absolutely positioned INSIDE .phone-shell so the
                   clone keeps theme variables + glass effect selectors
                   (.phone-shell[data-icon-effect] etc.); follows pointer via ref */}
-              {/* 应用目录：单页桌面里点「应用目录」按钮展开的一整页全屏清单。
+              {/* 应用目录：单页桌面里点右下角按钮展开的一整页全屏清单。
                   铺满手机屏幕并盖住底栏，头部固定、网格独立滚动。 */}
               {desktopViewMode === "single" && showAppDirectory && !activeApp ? (
                 <div className="ds-directory" role="dialog" aria-modal="true" aria-label="应用目录">

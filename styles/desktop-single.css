@@ -2,7 +2,7 @@
    本文件只服务单页形态，选择器全部限定在 .desktop-single / .ds-* 内，
    多页桌面（.phone-swipe-layer / .icon-grid 原样式）完全不受影响。
    图标沿用 .icon-item / .icon-glyph-box / .icon-label，
-   配色继续读主题变量（--c-home-* / --c-desktop-* / --c-text-*），
+   配色继续读主题变量（--c-home-* / --c-desktop-* / --c-text-* / --c-page-body-bg），
    所以换壁纸、换图标皮肤、改配色都会同时生效。 */
 
 .desktop-single {
@@ -14,41 +14,12 @@
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   touch-action: pan-y;
-  padding: 2px 2px 14px;
+  padding: 2px 2px 88px; /* 底部留白：别让最后一行图标被右下角悬浮按钮压住 */
   scrollbar-width: none;
 }
 
 .desktop-single::-webkit-scrollbar {
   display: none;
-}
-
-/* 「单页 / 分页」切换按钮：和多页的页码点共用同一条 page-controls */
-.ds-mode-pill {
-  appearance: none;
-  -webkit-appearance: none;
-  border: 1px solid var(--c-home-border, rgba(0, 0, 0, 0.06));
-  border-radius: 999px;
-  padding: 4px 12px;
-  font: inherit;
-  font-size: calc(11px*var(--app-text-scale,1));
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--c-home-text, rgba(0, 0, 0, 0.65));
-  background: var(--c-home-card, rgba(255, 255, 255, 0.4));
-  backdrop-filter: blur(10px) saturate(140%);
-  -webkit-backdrop-filter: blur(10px) saturate(140%);
-  cursor: pointer;
-  transition: transform 0.15s ease, opacity 0.15s ease;
-  white-space: nowrap;
-}
-
-.ds-mode-pill:active {
-  transform: scale(0.95);
-  opacity: 0.85;
-}
-
-.page-controls .ds-mode-pill {
-  margin-left: 10px;
 }
 
 /* ── 分区（常用 / 组件）── */
@@ -115,45 +86,42 @@
   display: contents;
 }
 
-/* ── 「应用目录」入口按钮：居中，点开是全屏目录页 ── */
+/* ── 「应用目录」悬浮按钮：贴右下角、压在 Dock 正上方 ──
+   定位参照 .phone-shell（有 position: relative），所以 bottom 直接按屏幕底算。
+   --dock-height 是 Dock 自身的底板高度；--home-dock-lift 是 Dock 的下外边距。
+   再往上抬一点，保证不压住 Dock 也不贴边。 */
 
-.ds-dir-launch {
-  flex: none;
-  display: flex;
-  justify-content: center;
-  padding: 2px 0 4px;
-}
-
-.ds-dir-btn {
+.ds-dir-fab {
+  position: absolute;
+  right: 18px;
+  bottom: calc(var(--dock-height, 92px) + var(--home-dock-lift, 0px) + 22px);
+  z-index: 60;
   appearance: none;
   -webkit-appearance: none;
-  border: 1px solid var(--c-home-border, rgba(0, 0, 0, 0.06));
+  width: 52px;
+  height: 52px;
   border-radius: 999px;
-  min-height: 46px;
-  padding: 0 24px;
+  border: 1px solid var(--c-home-border, rgba(0, 0, 0, 0.06));
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  font: inherit;
-  font-size: calc(13px*var(--app-text-scale,1));
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  justify-content: center;
   color: var(--c-home-text, rgba(0, 0, 0, 0.65));
-  background: var(--c-home-card, rgba(255, 255, 255, 0.4));
-  backdrop-filter: blur(14px) saturate(140%);
-  -webkit-backdrop-filter: blur(14px) saturate(140%);
-  box-shadow: 0 8px 22px rgb(0 0 0 / calc(0.16 * var(--desktop-shadow-strength, 0.5)));
+  background: var(--c-home-card, rgba(255, 255, 255, 0.5));
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  box-shadow: 0 10px 26px rgb(0 0 0 / calc(0.2 * var(--desktop-shadow-strength, 0.5)));
   cursor: pointer;
   transition: transform 0.15s ease, opacity 0.15s ease;
 }
 
-.ds-dir-btn:active {
-  transform: scale(0.96);
-  opacity: 0.85;
+.ds-dir-fab:active {
+  transform: scale(0.92);
+  opacity: 0.88;
 }
 
-.ds-dir-btn-glyph {
-  font-size: calc(15px*var(--app-text-scale,1));
+.ds-dir-fab-glyph {
+  font-size: calc(19px*var(--app-text-scale,1));
+  line-height: 1;
   color: var(--c-home-pink, var(--c-icon-active, #8c7ae6));
 }
 
