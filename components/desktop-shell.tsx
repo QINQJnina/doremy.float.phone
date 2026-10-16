@@ -1152,11 +1152,13 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
   const [layout, setLayout] = useState<DesktopLayout>(DEFAULT_LAYOUT);
   // Dock is an ordered icon-id list (max DOCK_MAX), kept disjoint from `layout`.
   const [dock, setDock] = useState<DesktopIconId[]>(DOCK_DEFAULT);
-  // 主屏形态：paged = 原来的多页翻页桌面；single = 单页桌面（常用 + 应用目录）。
+  // 主屏形态：paged = 原来的多页翻页桌面；single = 单页桌面（卡片化分组 + 应用目录）。
   // 只改变"怎么摆"，图标布局 / 组件位置 / 主题都不动，切换入口在「主题 → 桌面形态」。
   const [desktopViewMode, setDesktopViewMode] = useState<DesktopViewMode>("paged");
   // 单页桌面里「应用目录」全屏页是否展开（多页形态不用它）
   const [showAppDirectory, setShowAppDirectory] = useState(false);
+  // 应用目录的搜索词
+  const [appDirQuery, setAppDirQuery] = useState("");
   // 桌面文件夹：tile 在 layout 里占格子，这张表管名字和成员
   const [folders, setFolders] = useState<DesktopFolderMap>({});
   const [openFolderId, setOpenFolderId] = useState<string | null>(null);
@@ -2305,6 +2307,12 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
     writeDesktopViewMode(mode);
   }, []);
 
+  /** 打开应用目录：每次打开都从干净状态开始，不留上次的搜索词。 */
+  const openAppDirectory = useCallback(() => {
+    setAppDirQuery("");
+    setShowAppDirectory(true);
+  }, []);
+
   // 单页是滚动列表、不做拖拽排布：进入单页时退出编辑态；离开单页时收起应用目录。
   useEffect(() => {
     if (desktopViewMode !== "single") {
@@ -2321,18 +2329,32 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
     return (layout[firstPageKey] ?? []).map(item => item.id);
   }, [layout, pageKeys]);
 
-  /** 单页顶部组件区：沿用第一页的桌面组件。 */
+  /** 单页组件区：沿用第一页的桌面组件。
+   *  不套卡片——组件自带尺寸（2x2 / 2x4 / 4x4），那正是版式上「一格 / 两格 / 一排」的来源，
+   *  再包一层卡会把两层玻璃叠在一起。 */
   const firstPageWidgets = useMemo(
     () => widgets.filter(w => w.page === (getDesktopPageNumber(pageKeys[0] ?? "page1") || 1)),
     [widgets, pageKeys]
   );
 
-  /** 「应用目录」= 全部可用应用：内置图标清单 + 已装的自定义 APP。 */
-  const desktopDirectoryIcons = useMemo<DesktopIconId[]>(() => {
-    const builtin = Object.keys(ICONS) as IconId[];
-    const custom = customApps.map(app => toCustomAppIconId(app.id) as DesktopIconId);
-    return [...builtin, ...custom];
-  }, [customApps]);
+  /** 应用目录：按「我的应用 / 内置应用」分组，并支持按名称搜索。 */
+  const appDirectoryGroups = useMemo(() => {
+    const query = appDirQuery.trim().toLowerCase();
+    const matches = (iconId: DesktopIconId) => {
+      if (!query) return true;
+      const meta = getDesktopIconMeta(iconId);
+      if (!meta) return false;
+      return meta.label.toLowerCase().includes(query) || String(iconId).toLowerCase().includes(query);
+    };
+    const custom = customApps
+      .map(app => toCustomAppIconId(app.id) as DesktopIconId)
+      .filter(matches);
+    const builtin = (Object.keys(ICONS) as IconId[]).filter(matches);
+    const groups: Array<{ key: string; title: string; icons: DesktopIconId[] }> = [];
+    if (custom.length > 0) groups.push({ key: "custom", title: "我的应用", icons: custom });
+    if (builtin.length > 0) groups.push({ key: "builtin", title: "内置应用", icons: builtin });
+    return groups;
+  }, [appDirQuery, customApps, getDesktopIconMeta]);
 
   /**
    * 单页与目录页里的图标：外观与多页图标完全同款（图标皮肤 / 图片图标 / 未读红点 / 标签），
@@ -4777,13 +4799,19 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
                 {!activeApp ? (
                   <>
                     {desktopViewMode === "single" ? (
-                      /* ── 单页桌面：上面「常用」+ 组件；全部应用收在右下角「应用目录」按钮后 ── */
+                      /* ── 单页桌面：卡片化分组。常用收进一张卡，组件按自身尺寸自然排布 ── */
                       <>
                         <div className="desktop-single">
-                          <section className="ds-block">
-                            <div className="ds-block-head">
-                              <span className="ds-block-title">常用</span>
-                              <span className="ds-block-count">{favoriteIcons.length} 个</span>
+                          <section className="ds-card">
+                            <div className="ds-card-head">
+                              <span className="ds-card-title">常用</span>
+                              <button
+                                type="button"
+                                className="ds-card-more"
+                                onClick={openAppDirectory}
+                              >
+                                全部 ›
+                              </button>
                             </div>
                             <div className="ds-grid">
                               {favoriteIcons.map((iconId) => renderSingleIcon(iconId))}
@@ -4791,22 +4819,20 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
                           </section>
 
                           {firstPageWidgets.length > 0 && (
-                            <section className="ds-block">
-                              <div className="icon-grid ds-widgets">
-                                {firstPageWidgets.map((widget) => (
-                                  <div key={widget.id} className="widget-drag-wrap">
-                                    <WidgetRenderer widget={widget} onConfigChange={handleWidgetConfigChange} />
-                                  </div>
-                                ))}
-                              </div>
-                            </section>
+                            <div className="icon-grid ds-widget-row">
+                              {firstPageWidgets.map((widget) => (
+                                <div key={widget.id} className="widget-drag-wrap">
+                                  <WidgetRenderer widget={widget} onConfigChange={handleWidgetConfigChange} />
+                                </div>
+                              ))}
+                            </div>
                           )}
                         </div>
                         {!showAppDirectory && (
                           <button
                             type="button"
                             className="ds-dir-fab"
-                            onClick={() => setShowAppDirectory(true)}
+                            onClick={openAppDirectory}
                             aria-label="打开应用目录"
                             title="应用目录"
                           >
@@ -5362,8 +5388,8 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
               {/* Drag ghost — absolutely positioned INSIDE .phone-shell so the
                   clone keeps theme variables + glass effect selectors
                   (.phone-shell[data-icon-effect] etc.); follows pointer via ref */}
-              {/* 应用目录：单页桌面里点右下角按钮展开的一整页全屏清单。
-                  铺满手机屏幕并盖住底栏，头部固定、网格独立滚动。 */}
+              {/* 应用目录：单页桌面里点右下角按钮展开的一整页全屏清单（分组 + 搜索）。
+                  铺满手机屏幕并盖住底栏，头部与搜索框固定，分组各自独立滚动。 */}
               {desktopViewMode === "single" && showAppDirectory && !activeApp ? (
                 <div className="ds-directory" role="dialog" aria-modal="true" aria-label="应用目录">
                   <div className="ds-dir-head">
@@ -5377,10 +5403,40 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
                       ✕
                     </button>
                   </div>
+                  <div className="ds-dir-search">
+                    <input
+                      type="text"
+                      inputMode="search"
+                      value={appDirQuery}
+                      onChange={(event) => setAppDirQuery(event.target.value)}
+                      placeholder="搜索应用"
+                      aria-label="搜索应用"
+                    />
+                    {appDirQuery ? (
+                      <button
+                        type="button"
+                        className="ds-dir-clear"
+                        onClick={() => setAppDirQuery("")}
+                        aria-label="清空搜索"
+                      >
+                        ✕
+                      </button>
+                    ) : null}
+                  </div>
                   <div className="ds-dir-scroll">
-                    <div className="ds-grid ds-dir-grid">
-                      {desktopDirectoryIcons.map((iconId) => renderSingleIcon(iconId))}
-                    </div>
+                    {appDirectoryGroups.length === 0 ? (
+                      <div className="ds-dir-empty">没有匹配的应用</div>
+                    ) : appDirectoryGroups.map((group) => (
+                      <section key={group.key} className="ds-card ds-dir-group">
+                        <div className="ds-dir-group-head">
+                          <span>{group.title}</span>
+                          <span className="ds-dir-group-count">{group.icons.length}</span>
+                        </div>
+                        <div className="ds-grid">
+                          {group.icons.map((iconId) => renderSingleIcon(iconId))}
+                        </div>
+                      </section>
+                    ))}
                   </div>
                 </div>
               ) : null}

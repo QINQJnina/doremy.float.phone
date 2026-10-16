@@ -1,9 +1,9 @@
-/* ── Single-page desktop mode（单页桌面：常用 + 应用目录）──
+/* ── Single-page desktop mode（单页桌面：仪表盘式卡片分组）──
    本文件只服务单页形态，选择器全部限定在 .desktop-single / .ds-* 内，
    多页桌面（.phone-swipe-layer / .icon-grid 原样式）完全不受影响。
-   图标沿用 .icon-item / .icon-glyph-box / .icon-label，
-   配色继续读主题变量（--c-home-* / --c-desktop-* / --c-text-* / --c-page-body-bg），
-   所以换壁纸、换图标皮肤、改配色都会同时生效。 */
+
+   卡片材质刻意与「桌面组件」的玻璃卡保持一致（同样的渐变 / 模糊 / 高光 / 阴影），
+   所以换主题色、换壁纸、切「扁平纯色 / 毛玻璃态」时，卡片会跟着一起变。 */
 
 .desktop-single {
   flex: 1 1 auto;
@@ -14,7 +14,10 @@
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   touch-action: pan-y;
-  padding: 2px 2px 88px; /* 底部留白：别让最后一行图标被右下角悬浮按钮压住 */
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 8px 12px 96px; /* 底部留白：别让最后一行被右下角悬浮钮压住 */
   scrollbar-width: none;
 }
 
@@ -22,51 +25,97 @@
   display: none;
 }
 
-/* ── 分区（常用 / 组件）── */
+/* ══ 卡片本体 ══ */
 
-.ds-block {
-  margin-bottom: 14px;
+.ds-card {
+  position: relative;
+  overflow: hidden;
+  border-radius: 24px;
+  padding: 14px 12px 16px;
+  isolation: isolate;
+  /* 扁平态：半透明白 + 主题的组件底色（--c-home-card 默认近乎透明，
+     所以这里叠一层白，保证"扁平"下卡片也看得见轮廓） */
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.42)),
+    var(--c-home-card, transparent);
 }
 
-.ds-block-head {
+/* 毛玻璃态：与 .widget-glass 同款配方（斜向高光 + 描边 + 投影 + 粉光） */
+.phone-shell[data-widget-effect="glass"] .ds-card {
+  background:
+    linear-gradient(90deg,
+      transparent 8%,
+      rgba(255, 255, 255, 0.34) 50%,
+      transparent 92%) top 6% left 5% / 90% 2px no-repeat,
+    linear-gradient(135deg,
+      rgba(255, 255, 255, 0.26),
+      color-mix(in srgb, var(--c-home-pink, #f8bbd0) 5%, transparent),
+      rgba(255, 255, 255, 0.1)),
+    color-mix(in srgb, var(--c-home-card, rgba(255, 255, 255, 0.85)) 44%, transparent);
+  backdrop-filter: blur(22px) saturate(140%);
+  -webkit-backdrop-filter: blur(22px) saturate(140%);
+  box-shadow:
+    inset 0 1px 2px rgba(255, 255, 255, 0.38),
+    inset 0 -1px 1px rgba(255, 255, 255, 0.05),
+    0 8px 32px rgb(0 0 0 / calc(0.14 * var(--desktop-shadow-strength, 0))),
+    0 0 22px color-mix(in srgb, var(--c-home-pink, #f8bbd0) 8%, transparent);
+}
+
+/* ══ 卡片头 ══ */
+
+.ds-card-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 2px 8px 8px;
+  padding: 0 6px 12px;
 }
 
-.ds-block-title {
+.ds-card-title {
   font-size: calc(12.5px*var(--app-text-scale,1));
   font-weight: 700;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
   color: var(--c-home-text, rgba(0, 0, 0, 0.65));
 }
 
-.ds-block-count {
-  font-size: calc(10px*var(--app-text-scale,1));
-  color: var(--c-home-sub, rgba(0, 0, 0, 0.35));
+.ds-card-more {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 2px 4px;
+  font: inherit;
+  font-size: calc(11px*var(--app-text-scale,1));
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--c-home-pink, var(--c-icon-active, #8c7ae6));
+  cursor: pointer;
+  transition: opacity 0.15s ease;
 }
 
-/* ── 单页图标网格：四列，按行向下排（不再定格 6×4，可以一直往下长）── */
+.ds-card-more:active {
+  opacity: 0.55;
+}
+
+/* ══ 卡片内图标网格：四列、按行向下排 ══ */
 
 .ds-grid {
-  --slot-size: clamp(56px, calc((100vw - 108px) / 4), 66px);
-  --slot-gap-x: 20px;
   display: grid;
-  grid-template-columns: repeat(4, var(--slot-size));
-  column-gap: var(--slot-gap-x);
-  row-gap: 6px;
-  justify-content: center;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  justify-items: center;
+  column-gap: 2px;
+  row-gap: 10px;
 }
 
-.desktop-single .icon-item {
-  min-height: 76px;
+.ds-grid .icon-item {
+  width: 100%;
+  min-height: 72px;
 }
 
-/* ── 单页里的桌面组件：按行自然换行排列（多页模式是格子定位，这里只做布局覆盖）── */
+/* ══ 桌面组件：按自身尺寸自然排布（2x2 占一列、2x4 占满一行……）══
+   复用 .icon-grid 只是为了继承它的格子尺寸变量，布局本身改成流式换行。 */
 
-.icon-grid.ds-widgets {
+.icon-grid.ds-widget-row {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
@@ -78,18 +127,15 @@
   padding-bottom: 0;
 }
 
-.icon-grid.ds-widgets .widget-glass {
+.icon-grid.ds-widget-row .widget-glass {
   margin-left: 0;
 }
 
-.icon-grid.ds-widgets .widget-drag-wrap {
+.icon-grid.ds-widget-row .widget-drag-wrap {
   display: contents;
 }
 
-/* ── 「应用目录」悬浮按钮：贴右下角、压在 Dock 正上方 ──
-   定位参照 .phone-shell（有 position: relative），所以 bottom 直接按屏幕底算。
-   --dock-height 是 Dock 自身的底板高度；--home-dock-lift 是 Dock 的下外边距。
-   再往上抬一点，保证不压住 Dock 也不贴边。 */
+/* ══ 「应用目录」悬浮钮：贴右下角、压在 Dock 正上方 ══ */
 
 .ds-dir-fab {
   position: absolute;
@@ -125,7 +171,7 @@
   color: var(--c-home-pink, var(--c-icon-active, #8c7ae6));
 }
 
-/* ── 应用目录（全屏页）：铺满手机屏幕，盖住底栏，头部固定、网格独立滚动 ── */
+/* ══ 应用目录（全屏页）：铺满手机屏幕、盖住底栏，头部与搜索固定、分组独立滚动 ══ */
 
 .ds-directory {
   position: absolute;
@@ -184,6 +230,56 @@
   transform: scale(0.93);
 }
 
+/* ── 搜索框 ── */
+
+.ds-dir-search {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px 14px;
+}
+
+.ds-dir-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 42px;
+  border-radius: 14px;
+  border: 1px solid var(--c-input-border, rgba(0, 0, 0, 0.05));
+  background: var(--c-input, rgba(255, 255, 255, 0.72));
+  color: var(--c-text-title, #2c3440);
+  font: inherit;
+  font-size: calc(13px*var(--app-text-scale,1));
+  padding: 0 14px;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.ds-dir-search input::placeholder {
+  color: var(--c-icon, #a0a3a8);
+}
+
+.ds-dir-clear {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  border: 0;
+  background: var(--c-input, rgba(0, 0, 0, 0.06));
+  color: var(--c-icon, #a0a3a8);
+  font: inherit;
+  font-size: calc(12px*var(--app-text-scale,1));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+/* ── 分组滚动区 ── */
+
 .ds-dir-scroll {
   flex: 1 1 auto;
   min-height: 0;
@@ -191,17 +287,40 @@
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
-  padding-bottom: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 2px 0 8px;
 }
 
 .ds-dir-scroll::-webkit-scrollbar {
   display: none;
 }
 
-.ds-dir-grid {
-  padding-top: 2px;
+.ds-dir-group {
+  padding: 12px 10px 14px;
 }
 
-.ds-dir-grid .icon-item {
-  min-height: 76px;
+.ds-dir-group-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 6px 10px;
+  font-size: calc(11.5px*var(--app-text-scale,1));
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--c-home-text, rgba(0, 0, 0, 0.65));
+}
+
+.ds-dir-group-count {
+  font-weight: 500;
+  color: var(--c-home-sub, rgba(0, 0, 0, 0.35));
+}
+
+.ds-dir-empty {
+  padding: 48px 0;
+  text-align: center;
+  font-size: calc(12px*var(--app-text-scale,1));
+  color: var(--c-icon, #a0a3a8);
 }
