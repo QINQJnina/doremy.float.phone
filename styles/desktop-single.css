@@ -25,7 +25,7 @@
   -webkit-overflow-scrolling: touch;
   touch-action: pan-y;
   display: block;
-  padding: 8px 12px 96px; /* 底部留白：别让最后一行被右下角悬浮钮压住 */
+  padding: 8px 12px 56px; /* 底部留白：够避开右下角悬浮钮即可，不必留一大片空 */
   scrollbar-width: none;
 }
 
@@ -391,12 +391,59 @@
   animation: none;
   opacity: 1;
   background: var(--c-card, rgba(255, 255, 255, 0.7));
+  /* 版式改为「居中大图标 + 下方小标题」：
+     原来的 3:2 卡片里图标和文字分居左下/右上，中间空一大片、文字还偏大。
+     现在砍掉固定比例、内容居中，视觉重心交给图标。 */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  grid-template-areas: none;
+  grid-template-columns: none;
+  grid-template-rows: none;
+  aspect-ratio: auto;
+  min-height: 92px;
+  padding: 14px 10px;
+  text-align: center;
+}
+
+.desktop-single .card-card .card-card-body {
+  align-items: center;
+  width: 100%;
+  gap: 2px;
+}
+
+/* 居中排版下右箭头是多余的（它原本贴着卡片右下角） */
+.desktop-single .card-card .card-card-chevron {
+  display: none;
+}
+
+/* 主标题字号收小，让位给图标 */
+.desktop-single .card-card .card-label {
+  font-size: calc(12px*var(--app-text-scale,1));
+  font-weight: 600;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 卡片左下角的圆形图标底：应用图标要裁进圆里 */
 .desktop-single .card-card .card-icon {
   position: relative;
   overflow: hidden;
+  /* 图标放大：它是这张卡的视觉重心 */
+  width: 46px;
+  height: 46px;
+  align-self: center;
+}
+
+/* glyph 跟着放大后的圆底走 */
+.desktop-single .card-card .card-icon .ds-card-icon-glyph {
+  width: 24px;
+  height: 24px;
+  color: var(--c-text-title);
 }
 
 /* 有图标皮肤 / 自定义图标时，图片铺满圆形底 */
@@ -408,9 +455,21 @@
   background-position: center;
 }
 
-/* glyph 缩到圆形底里合适的大小，并跟随主题文字色 */
-.desktop-single .card-card .card-icon .ds-card-icon-glyph {
-  width: 22px;
-  height: 22px;
-  color: var(--c-text-title);
+/* ══ 单页里的 Dock（胶囊条）══
+   只作用于单页形态（桌面壳会在单页给 dock 加 .dock-single）；
+   多页桌面的 Dock 保持原样。
+   目标：少一点"贴上去的板子"感，让它和壁纸渐变融在一起，并贴近屏幕底部。 */
+
+.phone-shell .dock.dock-single {
+  background: color-mix(in srgb, var(--c-home-glass, rgba(255, 255, 255, 0.3)) 42%, transparent);
+  margin-bottom: calc(var(--home-dock-lift, 8px) * 0.35);
+}
+
+.phone-shell[data-icon-effect="glass"] .dock.dock-single:not([data-skinned]) {
+  background:
+    linear-gradient(135deg,
+      rgba(255, 255, 255, 0.1),
+      color-mix(in srgb, var(--c-desktop-icon-bg, #c7b8ff) 4%, transparent),
+      rgba(255, 255, 255, 0.04)),
+    color-mix(in srgb, var(--c-home-glass, rgba(255, 255, 255, 0.3)) 32%, transparent);
 }
