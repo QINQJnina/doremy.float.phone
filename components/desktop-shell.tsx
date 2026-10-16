@@ -104,7 +104,7 @@ import {
   resolveActiveIconSkins,
   type ThemeProfile
 } from "@/lib/theme-types";
-import { GRID_COLS, GRID_ROWS, WIDGET_SIZE_CELLS, WIDGET_CATALOG, type WidgetInstance, type WidgetType } from "@/lib/widget-types";
+import { GRID_COLS, GRID_ROWS, WIDGET_SIZE_CELLS, WIDGET_CATALOG, SINGLE_PAGE_WIDGET_OPTIONS, DEFAULT_SINGLE_PAGE_WIDGETS, type WidgetInstance, type WidgetType } from "@/lib/widget-types";
 import { buildOccupancyGrid, canPlaceWidget, placeWidget, createDefaultWidgets, loadWidgets, saveWidgets, loadDIYTemplates, saveDIYTemplates } from "@/lib/widget-storage";
 import {
   createDefaultDesktopIconLayout,
@@ -118,6 +118,10 @@ import {
   loadDesktopViewMode,
   writeDesktopViewMode,
   type DesktopViewMode,
+  loadSingleFavorites,
+  writeSingleFavorites,
+  loadSingleWidgets,
+  writeSingleWidgets,
   loadDesktopFolders,
   writeDesktopFolders,
   DOCK_LAYOUT_STORAGE_KEY,
@@ -1159,6 +1163,11 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
   const [showAppDirectory, setShowAppDirectory] = useState(false);
   // 应用目录的搜索词
   const [appDirQuery, setAppDirQuery] = useState("");
+  // 单页桌面的内容与多页布局解耦：常用是一份独立清单，组件也是一份独立清单。
+  // 装新应用不会自动进常用；改这两份清单都不影响多页桌面。
+  const [singleFavorites, setSingleFavorites] = useState<DesktopIconId[]>([]);
+  const [singleWidgets, setSingleWidgets] = useState<string[]>([]);
+  const singleContentReadyRef = useRef(false);
   // 桌面文件夹：tile 在 layout 里占格子，这张表管名字和成员
   const [folders, setFolders] = useState<DesktopFolderMap>({});
   const [openFolderId, setOpenFolderId] = useState<string | null>(null);
@@ -2323,19 +2332,56 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [desktopViewMode, editMode]);
 
-  /** 单页「常用」区：沿用第一页的图标（顺序、图标皮肤、未读红点都一致）。 */
-  const favoriteIcons = useMemo<DesktopIconId[]>(() => {
-    const firstPageKey = pageKeys[0] ?? "page1";
-    return (layout[firstPageKey] ?? []).map(item => item.id);
-  }, [layout, pageKeys]);
+  /** 单页「常用」：一份独立清单（与多页第一页解耦）。
+   *  首次使用（从没存过）时以第一页图标作为出厂默认，之后只由用户在主题里勾选。 */
+  const favoriteIcons = useMemo<DesktopIconId[]>(() => singleFavorites, [singleFavorites]);
 
-  /** 单页组件区：沿用第一页的桌面组件。
-   *  不套卡片——组件自带尺寸（2x2 / 2x4 / 4x4），那正是版式上「一格 / 两格 / 一排」的来源，
+  /** 把某个应用加进 / 移出「常用」。 */
+  const toggleSingleFavorite = useCallback((iconId: DesktopIconId) => {
+    setSingleFavorites(prev => {
+      const next = prev.includes(iconId)
+        ? prev.filter(id => id !== iconId)
+        : [...prev, iconId];
+      writeSingleFavorites(next);
+      return next;
+    });
+  }, []);
+
+  const handleSingleWidgetsChange = useCallback((types: string[]) => {
+    setSingleWidgets(types);
+    writeSingleWidgets(types);
+  }, []);
+
+  /** 单页组件：只按「单页组件清单」渲染，位置信息不参与——单页是流式排布。
+   *  不套卡片：组件自带尺寸（2x2 / 2x4）正是版式上「一格 / 两格 / 一排」的来源，
    *  再包一层卡会把两层玻璃叠在一起。 */
-  const firstPageWidgets = useMemo(
-    () => widgets.filter(w => w.page === (getDesktopPageNumber(pageKeys[0] ?? "page1") || 1)),
-    [widgets, pageKeys]
-  );
+  const singlePageWidgets = useMemo<WidgetInstance[]>(() => (
+    singleWidgets
+      .map((type, index) => {
+        const option = SINGLE_PAGE_WIDGET_OPTIONS.find(item => item.type === type);
+        if (!option) return null;
+        return {
+          id: `single-${type}`,
+          type: option.type,
+          size: option.size,
+          page: 1,
+          row: 1,
+          col: 1 + index,
+        } as WidgetInstance;
+      })
+      .filter((item): item is WidgetInstance => Boolean(item))
+  ), [singleWidgets]);
+
+  // 单页内容首次水合：从没设置过时用出厂默认
+  // （常用 = 第一页现有图标；组件 = 大时钟 / 日历 / AI 助手）。只跑一次。
+  useEffect(() => {
+    if (singleContentReadyRef.current || !desktopReady) return;
+    singleContentReadyRef.current = true;
+    const storedFavorites = loadSingleFavorites();
+    const storedWidgets = loadSingleWidgets();
+    setSingleFavorites(storedFavorites ?? (layout.page1 ?? []).map(item => item.id));
+    setSingleWidgets(storedWidgets ?? DEFAULT_SINGLE_PAGE_WIDGETS);
+  }, [desktopReady, layout]);
 
   /** 应用目录：按「我的应用 / 内置应用」分组，并支持按名称搜索。 */
   const appDirectoryGroups = useMemo(() => {
@@ -2413,6 +2459,32 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
         </span>
         <span className="icon-label">{icon.label}</span>
       </button>
+    );
+  }
+
+  /**
+   * 应用目录里的格子：图标 + 右上角「钉进常用」小星标。
+   * 星标不占布局（绝对定位），所以格子尺寸与单页图标完全一致；
+   * 点星标只改「常用」清单，不会打开应用。
+   */
+  function renderDirectoryIcon(iconId: DesktopIconId) {
+    if (isFolderIconId(iconId)) return renderSingleIcon(iconId);
+    const meta = getDesktopIconMeta(iconId);
+    if (!meta) return null;
+    const pinned = singleFavorites.includes(iconId);
+    return (
+      <div key={iconId} className="ds-dir-cell">
+        {renderSingleIcon(iconId)}
+        <button
+          type="button"
+          className={pinned ? "ds-pin on" : "ds-pin"}
+          onClick={(event) => { event.stopPropagation(); toggleSingleFavorite(iconId); }}
+          aria-label={pinned ? `把${meta.label}移出常用` : `把${meta.label}加入常用`}
+          title={pinned ? "已在常用" : "加入常用"}
+        >
+          {pinned ? "★" : "☆"}
+        </button>
+      </div>
     );
   }
 
@@ -4282,6 +4354,10 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
           wallpaperStyle={wallpaperStyle}
           desktopViewMode={desktopViewMode}
           onDesktopViewModeChange={handleDesktopViewModeChange}
+          singleFavorites={singleFavorites}
+          onToggleSingleFavorite={toggleSingleFavorite}
+          singleWidgets={singleWidgets}
+          onSingleWidgetsChange={handleSingleWidgetsChange}
         />
       );
     }
@@ -4802,6 +4878,17 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
                       /* ── 单页桌面：卡片化分组。常用收进一张卡，组件按自身尺寸自然排布 ── */
                       <>
                         <div className="desktop-single">
+                          {/* 组件在上、常用在下 */}
+                          {singlePageWidgets.length > 0 && (
+                            <div className="icon-grid ds-widget-row">
+                              {singlePageWidgets.map((widget) => (
+                                <div key={widget.id} className="widget-drag-wrap">
+                                  <WidgetRenderer widget={widget} onConfigChange={handleWidgetConfigChange} />
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
                           <section className="ds-card">
                             <div className="ds-card-head">
                               <span className="ds-card-title">常用</span>
@@ -4810,16 +4897,6 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
                               {favoriteIcons.map((iconId) => renderSingleIcon(iconId))}
                             </div>
                           </section>
-
-                          {firstPageWidgets.length > 0 && (
-                            <div className="icon-grid ds-widget-row">
-                              {firstPageWidgets.map((widget) => (
-                                <div key={widget.id} className="widget-drag-wrap">
-                                  <WidgetRenderer widget={widget} onConfigChange={handleWidgetConfigChange} />
-                                </div>
-                              ))}
-                            </div>
-                          )}
                         </div>
                         {/* 应用目录的唯一入口：右下角悬浮钮 */}
                         {!showAppDirectory && (
@@ -5427,7 +5504,7 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#121110;color:rgb
                           <span className="ds-dir-group-count">{group.icons.length}</span>
                         </div>
                         <div className="ds-grid">
-                          {group.icons.map((iconId) => renderSingleIcon(iconId))}
+                          {group.icons.map((iconId) => renderDirectoryIcon(iconId))}
                         </div>
                       </section>
                     ))}

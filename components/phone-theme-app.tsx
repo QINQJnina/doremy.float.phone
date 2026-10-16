@@ -27,7 +27,7 @@ import type { DesktopIconId, IconId } from "@/lib/desktop-config";
 import { DOCK_DEFAULT, PAGE_1_DEFAULT, PAGE_2_DEFAULT, PAGE_3_DEFAULT, ICONS } from "@/lib/desktop-config";
 import type { DesktopFolderMap, DesktopIconLayout, DesktopViewMode } from "@/lib/desktop-layout-storage";
 import { CUSTOM_APPS_UPDATED_EVENT, loadInstalledCustomApps } from "@/lib/custom-app-storage";
-import { toCustomAppIconId, type InstalledCustomApp } from "@/lib/custom-app-types";
+import { toCustomAppIconId, customAppIdFromIconId, type InstalledCustomApp } from "@/lib/custom-app-types";
 import { PageShell } from "@/components/ui/page-shell";
 import { readPwaDisplayPreference, writePwaDisplayPreference } from "@/lib/pwa-display-mode";
 import {
@@ -35,6 +35,7 @@ import {
   GRID_ROWS,
   WIDGET_CATALOG,
   WIDGET_SIZE_CELLS,
+  SINGLE_PAGE_WIDGET_OPTIONS,
   type WidgetInstance,
   type WidgetType,
 } from "@/lib/widget-types";
@@ -105,6 +106,12 @@ type PhoneThemeAppProps = {
   /** 当前主屏形态（由桌面壳注入）：paged = 多页翻页；single = 单页桌面 */
   desktopViewMode?: DesktopViewMode;
   onDesktopViewModeChange?: (mode: DesktopViewMode) => void;
+  /** 单页「常用」独立清单（与多页第一页解耦） */
+  singleFavorites?: DesktopIconId[];
+  onToggleSingleFavorite?: (iconId: DesktopIconId) => void;
+  /** 单页组件清单（与多页组件位置互不影响） */
+  singleWidgets?: string[];
+  onSingleWidgetsChange?: (types: string[]) => void;
 };
 
 function IconChevronRight() {
@@ -208,11 +215,46 @@ function isThemeSection(value: string): value is ThemeSection {
 function DesktopModePage({
   value,
   onChange,
+  singleFavorites,
+  onToggleSingleFavorite,
+  singleWidgets,
+  onSingleWidgetsChange,
 }: {
   value?: DesktopViewMode;
   onChange?: (mode: DesktopViewMode) => void;
+  singleFavorites?: DesktopIconId[];
+  onToggleSingleFavorite?: (iconId: DesktopIconId) => void;
+  singleWidgets?: string[];
+  onSingleWidgetsChange?: (types: string[]) => void;
 }) {
   const current: DesktopViewMode = value === "single" ? "single" : "paged";
+  const [installedApps, setInstalledApps] = useState<InstalledCustomApp[]>([]);
+
+  useEffect(() => {
+    setInstalledApps(loadInstalledCustomApps());
+    const sync = () => setInstalledApps(loadInstalledCustomApps());
+    window.addEventListener(CUSTOM_APPS_UPDATED_EVENT, sync);
+    return () => window.removeEventListener(CUSTOM_APPS_UPDATED_EVENT, sync);
+  }, []);
+
+  /** 可放进常用的全部应用：先摆自己装的 APP，再摆内置应用。 */
+  const allIcons = useMemo<DesktopIconId[]>(() => ([
+    ...installedApps.map(app => toCustomAppIconId(app.id) as DesktopIconId),
+    ...(Object.keys(ICONS) as IconId[]),
+  ]), [installedApps]);
+
+  const labelFor = useCallback((iconId: DesktopIconId): string => {
+    const appId = customAppIdFromIconId(iconId);
+    if (appId) return installedApps.find(app => app.id === appId)?.name ?? appId;
+    return ICONS[iconId as IconId]?.label ?? String(iconId);
+  }, [installedApps]);
+
+  const toggleWidget = (type: string) => {
+    const list = singleWidgets ?? [];
+    const next = list.includes(type) ? list.filter(item => item !== type) : [...list, type];
+    onSingleWidgetsChange?.(next);
+  };
+
   const options: Array<{ id: DesktopViewMode; title: string; desc: string }> = [
     {
       id: "paged",
@@ -247,8 +289,60 @@ function DesktopModePage({
           );
         })}
       </div>
+      {/* 单页 · 常用应用：独立清单，装新 APP 不会自动挤进来 */}
+      <div className="mt-6">
+        <h3 className="appearance-menu-section-title">单页 · 常用应用</h3>
+        <p className="mt-1 ts-11 leading-relaxed text-[var(--c-icon)]">
+          勾选要放进单页「常用」的应用。这是独立清单：新装的 APP 只会出现在应用目录里，
+          不会再自动挤进常用（也就是不会再默认落在多页桌面第一页）。
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {allIcons.map((iconId) => {
+            const on = (singleFavorites ?? []).includes(iconId);
+            return (
+              <button
+                key={iconId}
+                type="button"
+                onClick={() => onToggleSingleFavorite?.(iconId)}
+                className={`rounded-full border px-3 py-1.5 ts-13 font-medium transition active:scale-95 ${on ? "border-[var(--c-icon-active)] text-[var(--c-text-title)]" : "border-[var(--c-card-border)] text-[var(--c-icon)]"}`}
+              >
+                {on ? `★ ${labelFor(iconId)}` : labelFor(iconId)}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* 单页 · 组件：与多页桌面的组件位置互不影响 */}
+      <div className="mt-6">
+        <h3 className="appearance-menu-section-title">单页 · 组件</h3>
+        <p className="mt-1 ts-11 leading-relaxed text-[var(--c-icon)]">
+          单页顶部展示的组件（排在「常用」上面）。这份清单独立于多页桌面，
+          两边怎么改都不会互相影响。
+        </p>
+        <div className="mt-3 flex flex-col gap-2">
+          {SINGLE_PAGE_WIDGET_OPTIONS.map((option) => {
+            const on = (singleWidgets ?? []).includes(option.type);
+            return (
+              <button
+                key={option.type}
+                type="button"
+                onClick={() => toggleWidget(option.type)}
+                className={`w-full rounded-2xl border px-4 py-3 text-left transition active:scale-[0.98] ${on ? "border-[var(--c-icon-active)]" : "border-[var(--c-card-border)]"} bg-[var(--c-card)]`}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <span className="ts-13 font-semibold text-[var(--c-text-title)]">{option.name}</span>
+                  {on ? <CheckCircle2 size={16} className="shrink-0 text-[var(--c-icon-active)]" /> : null}
+                </div>
+                <p className="mt-0.5 ts-10 leading-relaxed text-[var(--c-icon)]">{option.desc}</p>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       <p className="mt-4 ts-11 leading-relaxed text-[var(--c-icon)]">
-        切换不会影响图标位置、桌面组件和主题，也不会动任何数据，随时可以切回来。
+        切换形态不会影响图标位置、桌面组件和主题，也不会动任何数据，随时可以切回来。
       </p>
     </div>
   );
@@ -268,6 +362,10 @@ export function PhoneThemeApp({
   wallpaperStyle,
   desktopViewMode,
   onDesktopViewModeChange,
+  singleFavorites,
+  onToggleSingleFavorite,
+  singleWidgets,
+  onSingleWidgetsChange,
 }: PhoneThemeAppProps) {
   const [section, setSection] = useState<ThemeSection>(() => {
     if (typeof window !== "undefined") {
@@ -605,6 +703,10 @@ export function PhoneThemeApp({
           <DesktopModePage
             value={desktopViewMode}
             onChange={onDesktopViewModeChange}
+            singleFavorites={singleFavorites}
+            onToggleSingleFavorite={onToggleSingleFavorite}
+            singleWidgets={singleWidgets}
+            onSingleWidgetsChange={onSingleWidgetsChange}
           />
         ) : section === "palette" ? (
           <PalettePresetPage draft={draft} onDraftChange={onDraftChange} onApply={onApply} onNotice={onNotice} />

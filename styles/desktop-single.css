@@ -105,6 +105,45 @@
   min-height: 72px;
 }
 
+/* ══ 应用目录里的「钉进常用」按钮 ══
+   每个格子里图标在下、星标在上层（不占布局），点星标即可把该应用加进/移出常用。 */
+
+.ds-dir-cell {
+  position: relative;
+  width: 100%;
+}
+
+.ds-pin {
+  position: absolute;
+  top: -2px;
+  right: 2px;
+  z-index: 3;
+  appearance: none;
+  -webkit-appearance: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--c-home-border, rgba(0, 0, 0, 0.06));
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(12px*var(--app-text-scale,1));
+  line-height: 1;
+  color: var(--c-icon, #a0a3a8);
+  background: var(--c-panel, rgba(255, 255, 255, 0.86));
+  cursor: pointer;
+  transition: transform 0.15s ease, color 0.15s ease;
+}
+
+.ds-pin:active {
+  transform: scale(0.88);
+}
+
+.ds-pin.on {
+  color: var(--c-home-pink, var(--c-icon-active, #8c7ae6));
+}
+
 /* 滚动性能：毛玻璃态下每个图标自身都带 22px 模糊，一屏几十个图标同时重新采样，
    手指划动时就会明显掉帧。单页与目录里把模糊半径压到 5px ——
    背后本来就已经是糊的，肉眼几乎看不出差别，但滚动会顺很多。 */

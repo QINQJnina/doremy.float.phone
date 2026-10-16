@@ -137,3 +137,25 @@ export const WIDGET_CATALOG: WidgetCatalogEntry[] = [
 
 export const GRID_ROWS = 6;
 export const GRID_COLS = 4;
+
+/**
+ * 单页桌面可选的组件：只列标准组件里"开箱即用、不需要额外配置"的几个，并附带推荐尺寸。
+ * 单页桌面按这份清单渲染，**不会**动多页桌面的组件位置——两边各自独立。
+ */
+export const SINGLE_PAGE_WIDGET_OPTIONS: Array<{
+  type: WidgetType;
+  name: string;
+  size: WidgetSize;
+  desc: string;
+}> = [
+  { type: "largeTime", name: "数字大时钟", size: "2x4", desc: "大字时间与日期" },
+  { type: "clock", name: "时钟 + 日期", size: "2x2", desc: "紧凑时间与星期" },
+  { type: "calendar", name: "日历", size: "2x2", desc: "月视图，高亮今天" },
+  { type: "mascot", name: "AI 助手", size: "2x2", desc: "桌宠，点击召唤" },
+  { type: "loveNote", name: "情话便签", size: "2x2", desc: "随机一句甜话" },
+  { type: "moodPill", name: "心情气泡", size: "1x4", desc: "浮动心情标签" },
+  { type: "music", name: "音乐播放器", size: "2x4", desc: "封面与播放控制" },
+];
+
+/** 单页桌面组件的出厂默认：大时钟 + 日历 + AI 助手 */
+export const DEFAULT_SINGLE_PAGE_WIDGETS: WidgetType[] = ["largeTime", "calendar", "mascot"];

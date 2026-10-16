@@ -364,3 +364,63 @@ export function loadDesktopViewMode(): DesktopViewMode {
 export function writeDesktopViewMode(mode: DesktopViewMode): void {
   kvSet(DESKTOP_VIEW_MODE_STORAGE_KEY, JSON.stringify(mode === "single" ? "single" : "paged"));
 }
+
+// ── Single-page desktop content ───────────────────────
+// 单页桌面的内容与多页布局**解耦**，各自独立：
+//   favorites = 单页「常用」的图标清单（装新应用不会自动挤进来，由用户在
+//               「主题 → 桌面形态」里勾选）
+//   widgets   = 单页顶部展示的组件类型清单
+// 两者都不影响多页桌面的图标位置与组件摆位。
+
+export const SINGLE_FAVORITES_STORAGE_KEY = "ai_phone_single_favorites_v1";
+export const SINGLE_WIDGETS_STORAGE_KEY = "ai_phone_single_widgets_v1";
+
+registerKvMigration(SINGLE_FAVORITES_STORAGE_KEY);
+registerKvMigration(SINGLE_WIDGETS_STORAGE_KEY);
+
+/** 读取单页「常用」清单；从未设置过时返回 null（调用方自行决定默认值）。 */
+export function loadSingleFavorites(): DesktopIconId[] | null {
+  const raw = kvGet(SINGLE_FAVORITES_STORAGE_KEY);
+  if (raw == null) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    const known = new Set<string>(Object.keys(ICONS));
+    const customIconIds = getInstalledCustomIconIds();
+    const seen = new Set<DesktopIconId>();
+    const result: DesktopIconId[] = [];
+    for (const item of parsed) {
+      if (typeof item !== "string") continue;
+      if (item.startsWith("folder:")) continue; // 文件夹不进常用
+      const migrated = migrateLegacyDesktopIconId(item, customIconIds);
+      if (!migrated || seen.has(migrated)) continue;
+      if (!known.has(migrated) && !customIconIds.has(migrated)) continue;
+      seen.add(migrated);
+      result.push(migrated);
+    }
+    return result;
+  } catch {
+    return null;
+  }
+}
+
+export function writeSingleFavorites(ids: DesktopIconId[]): void {
+  kvSet(SINGLE_FAVORITES_STORAGE_KEY, JSON.stringify(ids));
+}
+
+/** 读取单页组件清单；从未设置过时返回 null（调用方自行决定默认值）。 */
+export function loadSingleWidgets(): string[] | null {
+  const raw = kvGet(SINGLE_WIDGETS_STORAGE_KEY);
+  if (raw == null) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    return parsed.filter((item): item is string => typeof item === "string");
+  } catch {
+    return null;
+  }
+}
+
+export function writeSingleWidgets(types: string[]): void {
+  kvSet(SINGLE_WIDGETS_STORAGE_KEY, JSON.stringify(types));
+}
