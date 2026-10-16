@@ -430,7 +430,7 @@ export function PhoneThemeApp({
             <div>
               <h3 className="appearance-menu-section-title">Appearance</h3>
               <div className="card-grid mt-2.5">
-                {MENU_ITEMS.filter(item => ["palette", "wallpaper", "icons", "widgets"].includes(item.section)).map((item) => (
+                {MENU_ITEMS.filter(item => ["palette", "wallpaper", "icons", "widgets", "desktop"].includes(item.section)).map((item) => (
                   <button
                     key={item.section}
                     className="app-card card-card"
