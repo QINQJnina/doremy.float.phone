@@ -150,7 +150,9 @@ export const SINGLE_PAGE_WIDGET_OPTIONS: Array<{
 }> = [
   { type: "largeTime", name: "数字大时钟", size: "2x4", desc: "大字时间与日期" },
   { type: "clock", name: "时钟 + 日期", size: "2x2", desc: "紧凑时间与星期" },
-  { type: "calendar", name: "日历", size: "2x2", desc: "月视图，高亮今天" },
+  // 日历在 2x2 里塞整月视图，7 行分 ~80px、每行 11px，日期（9px 字）会挤在一起。
+  // 单页这里给它 3x2（宽度不变、高度多一格行），每行约 21px，行距才透得开。
+  { type: "calendar", name: "日历", size: "3x2", desc: "月视图，高亮今天（比 2x2 高一格，日期才不挤）" },
   { type: "mascot", name: "AI 助手", size: "2x2", desc: "桌宠，点击召唤" },
   { type: "loveNote", name: "情话便签", size: "2x2", desc: "随机一句甜话" },
   { type: "moodPill", name: "心情气泡", size: "1x4", desc: "浮动心情标签" },
