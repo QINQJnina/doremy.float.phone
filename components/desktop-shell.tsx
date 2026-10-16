@@ -104,7 +104,7 @@ import {
   resolveActiveIconSkins,
   type ThemeProfile
 } from "@/lib/theme-types";
-import { GRID_COLS, GRID_ROWS, WIDGET_SIZE_CELLS, WIDGET_CATALOG, SINGLE_PAGE_WIDGET_OPTIONS, DEFAULT_SINGLE_PAGE_WIDGETS, type WidgetInstance, type WidgetType } from "@/lib/widget-types";
+import { GRID_COLS, GRID_ROWS, WIDGET_SIZE_CELLS, WIDGET_CATALOG, resolveSingleWidgetSize, DEFAULT_SINGLE_PAGE_WIDGETS, type WidgetInstance, type WidgetType } from "@/lib/widget-types";
 import { buildOccupancyGrid, canPlaceWidget, placeWidget, createDefaultWidgets, loadWidgets, saveWidgets, loadDIYTemplates, saveDIYTemplates } from "@/lib/widget-storage";
 import {
   createDefaultDesktopIconLayout,
@@ -2356,22 +2356,23 @@ export function DesktopShell({ initialThemeProfile, initialThemeAssets }: Deskto
   /** 单页组件：只按「单页组件清单」渲染，位置信息不参与——单页是流式排布。
    *  不套卡片：组件自带尺寸（2x2 / 2x4）正是版式上「一格 / 两格 / 一排」的来源，
    *  再包一层卡会把两层玻璃叠在一起。 */
-  const singlePageWidgets = useMemo<WidgetInstance[]>(() => (
-    singleWidgets
-      .map((type, index) => {
-        const option = SINGLE_PAGE_WIDGET_OPTIONS.find(item => item.type === type);
-        if (!option) return null;
-        return {
-          id: `single-${type}`,
-          type: option.type,
-          size: option.size,
-          page: 1,
-          row: 1,
-          col: 1 + index,
-        } as WidgetInstance;
-      })
-      .filter((item): item is WidgetInstance => Boolean(item))
-  ), [singleWidgets]);
+  const singlePageWidgets = useMemo<WidgetInstance[]>(() => {
+    // 用户自制的 DIY 组件不在标准目录里，尺寸得从模板读
+    const diyTemplates = singleWidgets.some((type) => type.startsWith("diy-")) ? loadDIYTemplates() : [];
+    return singleWidgets.map((type, index) => {
+      const size = type.startsWith("diy-")
+        ? (diyTemplates.find((item) => item.id === type)?.size ?? "2x2")
+        : resolveSingleWidgetSize(type);
+      return {
+        id: `single-${type}`,
+        type,
+        size,
+        page: 1,
+        row: 1,
+        col: 1 + index,
+      } as WidgetInstance;
+    });
+  }, [singleWidgets]);
 
   // 单页内容首次水合：从没设置过时用出厂默认
   // （常用 = 第一页现有图标；组件 = 大时钟 / 日历 / AI 助手）。只跑一次。

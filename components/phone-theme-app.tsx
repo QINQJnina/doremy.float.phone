@@ -35,7 +35,7 @@ import {
   GRID_ROWS,
   WIDGET_CATALOG,
   WIDGET_SIZE_CELLS,
-  SINGLE_PAGE_WIDGET_OPTIONS,
+  SINGLE_PAGE_WIDGET_CATALOG,
   type WidgetInstance,
   type WidgetType,
 } from "@/lib/widget-types";
@@ -230,12 +230,30 @@ function DesktopModePage({
   const current: DesktopViewMode = value === "single" ? "single" : "paged";
   const [installedApps, setInstalledApps] = useState<InstalledCustomApp[]>([]);
 
+  const [diyTemplates, setDiyTemplates] = useState<DIYWidgetTemplate[]>([]);
+
   useEffect(() => {
     setInstalledApps(loadInstalledCustomApps());
     const sync = () => setInstalledApps(loadInstalledCustomApps());
     window.addEventListener(CUSTOM_APPS_UPDATED_EVENT, sync);
     return () => window.removeEventListener(CUSTOM_APPS_UPDATED_EVENT, sync);
   }, []);
+
+  useEffect(() => {
+    setDiyTemplates(loadDIYTemplates());
+  }, []);
+
+  /** 单页可选组件：完整目录（标准 + 自由艺术）+ 用户自制的 DIY 组件 */
+  const widgetChoices = useMemo(() => [
+    ...SINGLE_PAGE_WIDGET_CATALOG,
+    ...diyTemplates.map((template) => ({
+      type: template.id,
+      name: template.name || "DIY 组件",
+      desc: template.mode === "image" ? "图片贴纸" : "自定义代码",
+      size: String(template.size),
+      freestyle: true,
+    })),
+  ], [diyTemplates]);
 
   /** 可放进常用的全部应用：先摆自己装的 APP，再摆内置应用。 */
   const allIcons = useMemo<DesktopIconId[]>(() => ([
@@ -320,25 +338,36 @@ function DesktopModePage({
           单页顶部展示的组件（排在「常用」上面）。这份清单独立于多页桌面，
           两边怎么改都不会互相影响。
         </p>
-        <div className="mt-3 flex flex-col gap-2">
-          {SINGLE_PAGE_WIDGET_OPTIONS.map((option) => {
-            const on = (singleWidgets ?? []).includes(option.type);
-            return (
-              <button
-                key={option.type}
-                type="button"
-                onClick={() => toggleWidget(option.type)}
-                className={`w-full rounded-2xl border px-4 py-3 text-left transition active:scale-[0.98] ${on ? "border-[var(--c-icon-active)]" : "border-[var(--c-card-border)]"} bg-[var(--c-card)]`}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <span className="ts-13 font-semibold text-[var(--c-text-title)]">{option.name}</span>
-                  {on ? <CheckCircle2 size={16} className="shrink-0 text-[var(--c-icon-active)]" /> : null}
-                </div>
-                <p className="mt-0.5 ts-10 leading-relaxed text-[var(--c-icon)]">{option.desc}</p>
-              </button>
-            );
-          })}
-        </div>
+        {(["standard", "freestyle"] as const).map((trackKey) => {
+          const items = widgetChoices.filter((choice) => (trackKey === "freestyle") === choice.freestyle);
+          if (items.length === 0) return null;
+          return (
+            <div key={trackKey} className="mt-3">
+              <div className="ts-11 font-semibold text-[var(--c-icon)]">
+                {trackKey === "freestyle" ? "自由艺术" : "标准组件"}
+              </div>
+              <div className="mt-2 flex flex-col gap-2">
+                {items.map((option) => {
+                  const on = (singleWidgets ?? []).includes(option.type);
+                  return (
+                    <button
+                      key={option.type}
+                      type="button"
+                      onClick={() => toggleWidget(option.type)}
+                      className={`w-full rounded-2xl border px-4 py-3 text-left transition active:scale-[0.98] ${on ? "border-[var(--c-icon-active)]" : "border-[var(--c-card-border)]"} bg-[var(--c-card)]`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="ts-13 font-semibold text-[var(--c-text-title)]">{option.name}</span>
+                        {on ? <CheckCircle2 size={16} className="shrink-0 text-[var(--c-icon-active)]" /> : null}
+                      </div>
+                      <p className="mt-0.5 ts-10 leading-relaxed text-[var(--c-icon)]">{option.desc} · {option.size}</p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       <p className="mt-4 ts-11 leading-relaxed text-[var(--c-icon)]">
