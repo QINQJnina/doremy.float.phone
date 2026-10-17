@@ -160,45 +160,48 @@ focus scroll 动不了它。
 - ❌ 不是「状态栏占位上移 / `--status-bar-drop` 时有时无」。实测该项一直是 0。
 - ❌ 不是第三方美化 CSS 修好了。那份 CSS 里没有任何 `.ds-directory` / `--status-bar-drop` 规则（见 K7）。
 
-**对照实验记录（两次，结果互相矛盾）**
+**对照实验记录（四次，结论已翻转）**
 
-**第一次（2026-10-17，加 clip 临时 CSS）**：点搜索框键盘弹起，**标题稳稳在**，滚动顺滑。
-当时据此认为「机制成立」，据此改了源码。
-
-**第二次（同一天稍晚，清缓存 + 重新放同样的 clip 临时 CSS）**：
-点搜索框后，**「应用目录」标题、搜索框、返回键 ✕ 三者视觉消失**，
-但——**搜索框仍能输入文字、返回键仍能点（功能正常）**。
-
-两次使用同一份临时 CSS，结果却相反。**这说明 clip 没有稳定解决问题，第一次的"稳稳在"是假象。**
-K1 的「focus scroll」结论**降级为不确定**，根因需要重新定位（见 U1）。
-
-**「能交互但看不见」是关键线索**：元素还在 DOM、事件还绑定、焦点还在，
-只是**视觉上消失了**。这排除了"元素被删除 / 布局塌缩"的可能，指向三种机制之一：
-
-| 机制 | 与 clip 的关系 | 症状吻合度 |
+| # | 实验 | 结果 |
 |---|---|---|
-| A. `html/body` 被 focus scroll 滚动（它们仍是 `overflow: hidden`） | clip 管不到它们 | 整个画面被顶走 |
-| B. `--mobile-keyboard-lift` 的 transform 抬升整块 `.phone-shell-wrap` | clip 管不到 transform | 顶部出屏幕 |
-| C. `.ds-directory` 的 `contain: paint` + `overflow: clip` 在 WebView 的绘制层 bug | 正是 clip 引入的 | **"看得见交互看不见绘制"最吻合** |
+| 1 | 3 行 clip 临时 CSS（首次） | 键盘弹出 → 标题**稳稳在**（后被证伪：假阳性） |
+| 2 | 清缓存 + 重新放同款 clip | 键盘弹出 → 标题/搜索框/返回键**消失但可交互** |
+| 3 | 实验 C：再加 `.ds-directory{contain:none!important}` | **现象翻转**：弹出→出现，收起→**消失但可交互** |
+| 4 | 实验 C+A：再加 `html,body{overflow:clip!important}` | **更混乱**：弹出/收起两种状态都随机出现/消失 |
 
-**倾向 C**：`contain: paint` 创建独立绘制层，WebView（Chrome 116）里键盘重排时
-该层可能没有正确重绘，导致内容"布局在、绘制丢"。这也解释了「时有时无」——
-绘制层的更新有竞态，有时正常有时坏。
+**核心观察（用户原话）**：键盘出现和消失会"刷新"什么——每次键盘状态变化触发
+resize → 两个 hook 改 CSS 变量 → 重排/重绘，**而重绘结果不稳定（竞态）**。
 
-**待验证实验（分层，一次一个）**：
+**「能交互但看不见」排除**：元素删除、布局塌缩、focus scroll（clip 已上仍失效）。
+
+**翻转现象的含义**：去掉 `contain: paint` 后坏/好的时机正好对调——
+`contain: paint` 是因素之一，但**不是唯一因素**，存在第二个叠加因素。
+
+**修正后的头号嫌疑：`.phone-shell-wrap` 的永久 transform 合成层**
 
 ```css
-/* 实验 C：去掉 contain:paint，最可疑 */
-.ds-directory { contain: none !important; }
-
-/* 实验 A：补上最后没改的 html/body */
-html, body { overflow: clip !important; }
-
-/* 实验 B：禁用键盘抬升（副作用：聊天输入框会被键盘盖住，仅验证用） */
-.phone-shell-wrap { transform: none !important; }
+.phone-shell-wrap {
+  transform: translate3d(0, calc(-1 * var(--mobile-keyboard-lift, 0px)), 0);
+  will-change: transform;
+}
 ```
 
-按 C → A → B 的顺序单独测，哪个让标题稳定，哪个就是根因。
+`translate3d(...)` 即使结果为 `(0,0,0)` 也是**非 none 的 transform**，强制整层走 GPU 合成；
+`will-change: transform` 更是明示保层。目录页整个在这层里，键盘 resize 时该层重绘出错 →
+**整层视觉消失、布局与点击区域仍在**，与「看不见但能点」完全吻合。
+
+**待做实验（按顺序，一次一个）**：
+
+```css
+/* 实验 B（首要）：禁用整层 transform，验证合成层假设 */
+.phone-shell-wrap { transform: none !important; will-change: auto !important; }
+/* 副作用：聊天输入框会被键盘盖住（抬升靠 transform），仅验证用，验完删 */
+```
+
+- B 有效 → 根因是「合成层 + 键盘 resize 重绘竞态」，修法方向：键盘抬升不用 transform
+  （改 margin-top）或去掉 `will-change: transform` 让浏览器自行降层。
+- B 仍无效 → 合成层假设不成立，需 `chrome://inspect` 在弹出/收起两态逐一读 computed 值，
+  CSS 盲测已接近边际效益递减。
 
 ---
 
