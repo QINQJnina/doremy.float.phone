@@ -160,16 +160,45 @@ focus scroll 动不了它。
 - ❌ 不是「状态栏占位上移 / `--status-bar-drop` 时有时无」。实测该项一直是 0。
 - ❌ 不是第三方美化 CSS 修好了。那份 CSS 里没有任何 `.ds-directory` / `--status-bar-drop` 规则（见 K7）。
 
-**对照实验记录**
+**对照实验记录（两次，结果互相矛盾）**
 
-在真机上用 3 行 CSS 临时验证过（加在全局自定义 CSS 末尾）：
+**第一次（2026-10-17，加 clip 临时 CSS）**：点搜索框键盘弹起，**标题稳稳在**，滚动顺滑。
+当时据此认为「机制成立」，据此改了源码。
+
+**第二次（同一天稍晚，清缓存 + 重新放同样的 clip 临时 CSS）**：
+点搜索框后，**「应用目录」标题、搜索框、返回键 ✕ 三者视觉消失**，
+但——**搜索框仍能输入文字、返回键仍能点（功能正常）**。
+
+两次使用同一份临时 CSS，结果却相反。**这说明 clip 没有稳定解决问题，第一次的"稳稳在"是假象。**
+K1 的「focus scroll」结论**降级为不确定**，根因需要重新定位（见 U1）。
+
+**「能交互但看不见」是关键线索**：元素还在 DOM、事件还绑定、焦点还在，
+只是**视觉上消失了**。这排除了"元素被删除 / 布局塌缩"的可能，指向三种机制之一：
+
+| 机制 | 与 clip 的关系 | 症状吻合度 |
+|---|---|---|
+| A. `html/body` 被 focus scroll 滚动（它们仍是 `overflow: hidden`） | clip 管不到它们 | 整个画面被顶走 |
+| B. `--mobile-keyboard-lift` 的 transform 抬升整块 `.phone-shell-wrap` | clip 管不到 transform | 顶部出屏幕 |
+| C. `.ds-directory` 的 `contain: paint` + `overflow: clip` 在 WebView 的绘制层 bug | 正是 clip 引入的 | **"看得见交互看不见绘制"最吻合** |
+
+**倾向 C**：`contain: paint` 创建独立绘制层，WebView（Chrome 116）里键盘重排时
+该层可能没有正确重绘，导致内容"布局在、绘制丢"。这也解释了「时有时无」——
+绘制层的更新有竞态，有时正常有时坏。
+
+**待验证实验（分层，一次一个）**：
 
 ```css
-.app-root, .phone-shell, .ds-directory { overflow: clip !important; }
+/* 实验 C：去掉 contain:paint，最可疑 */
+.ds-directory { contain: none !important; }
+
+/* 实验 A：补上最后没改的 html/body */
+html, body { overflow: clip !important; }
+
+/* 实验 B：禁用键盘抬升（副作用：聊天输入框会被键盘盖住，仅验证用） */
+.phone-shell-wrap { transform: none !important; }
 ```
 
-结果：点搜索框键盘弹起，**标题稳稳在**，目录滚动依然顺滑。→ 机制成立。
-源码修复即基于此实验，**真机复验结果见第六节**。
+按 C → A → B 的顺序单独测，哪个让标题稳定，哪个就是根因。
 
 ---
 
