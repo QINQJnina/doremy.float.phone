@@ -276,8 +276,10 @@ flex 子项的 `min-height: auto` 会解析为 0 —— 卡片被压扁到容器
 
 现用主题 `b.css`（约 300k）有几个必须知道的特点：
 
+- 原版名为 **`Pillowy-全局完整主题内含聊天室主页美化v15.css`**，来自资源集市的分享
 - 文件头标注来源是**另一个 fork**（`Repository 1206149951-create/float @ 8ef9e34`），
   DOM 结构可能与当前上游不同
+- **导入前删掉了内嵌的图片资源**（原文件太大）。这一点后果严重，见 K8
 - **几乎每条规则都带 `!important`**，覆盖力极强，出问题极难定位
 - 有 `font-size: 0 !important` + `::after { content: "トーク" }` 这类**改文案**的规则，
   不只是换皮
@@ -294,6 +296,65 @@ flex 子项的 `min-height: auto` 会解析为 0 —— 卡片被压扁到容器
 ```bash
 grep -nE "ds-directory|ds-dir|status-bar-drop|mobile-keyboard-lift|phone-screen-height|phone-shell-wrap" b.css
 ```
+
+---
+
+### K8. 美化 CSS 删掉图片资源后的「空壳占位」 【实证】
+
+**背景**：`b.css` 原版是 `Pillowy-全局完整主题内含聊天室主页美化v15.css`，
+因文件过大，导入前**删掉了内嵌图片资源**，但**依赖这些图片的布局规则没删**。
+
+结果：一批 `::before` / `::after` 变成了**有尺寸、无内容**的空块。
+其中两类是**真实占据流内空间**的（不是绝对定位的装饰），会明显撑开空白：
+
+**① 聊天页 / 联系人页顶部的刊头空块**
+
+```css
+.chat-app:not([data-room-active])
+  .page-body:has(input[placeholder="Search chats..."])::before {
+    content: ""; display: block; flex-shrink: 0; width: 100%;
+    aspect-ratio: 380 / 190; margin: 4px 0 20px;
+  }
+```
+
+`display:block` + `flex-shrink:0` + `aspect-ratio` → 流内真实占位。
+本机（360px 宽、内容宽约 324px）算下来：高约 **162px** + margin 24px ≈ **186px 纯空白**，
+约占 805px 屏高的 **23%**。
+
+后续虽有 `background-size` / `background-position` 规则，但**没有 `background-image`**，
+块依旧是空的。
+
+**② 朋友圈卡片 33px 透明边框**
+
+```css
+.chat-app .feed-post {
+  border: 33px solid transparent !important;
+  border-image-slice: 20% !important;
+}
+```
+
+`border-image` 的图没了，`33px solid transparent` 还在 → 每张卡左右各 33px 纯空白边框。
+
+**影响判断**
+- **不是 K1 的成因**——K1 在 `.ds-directory`，b.css 里没有任何该选择器规则
+- 但它是"界面显得空、内容显得少"的另一半来源，容易被误感知为"显示不全"
+
+**如果想让界面恢复正常密度**，两条路：
+
+1. **补回图片**（原版完整 CSS），空块就变成了装饰图
+2. **删掉这些占位规则**（更省体积），至少处理 ①② 两类：
+   - 把 `::before` 那条设成 `display: none`
+   - 把 `.feed-post` 的 `border: 33px solid transparent` 改回 `border: 0`
+
+自查命令（列出所有"有尺寸但可能没图"的伪元素）：
+
+```bash
+grep -nE '::(before|after) *\{' b.css | grep -E 'width|height|aspect-ratio'
+```
+
+> 顺带记录一个判断经验：**「加了美化反而正常」不等于美化修好了问题**。
+> 它可能同时做两件事——视觉掩盖（改底色/边界）+ 引入新的空白。
+> 想分清，就把美化临时关掉，用 K1 的 ①② 两问重新分诊一次。
 
 ---
 
