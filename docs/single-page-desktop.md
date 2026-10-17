@@ -25,9 +25,9 @@
 
 ---
 
-## 一、时间线（15 个提交）
+## 一、时间线（19 个提交）
 
-相对上游 `doremy1203/doremy.float.phone:main` 领先 15 个提交，全部集中在 2026-10-16 → 10-17。
+相对上游 `doremy1203/doremy.float.phone:main` 领先 19 个提交，全部集中在 2026-10-16 → 10-17。
 
 | # | 提交 | 标题 | 要点 |
 |---|---|---|---|
@@ -46,6 +46,10 @@
 | 13 | `62bba951ce` | feat: 组件开放完整目录 | 不再限定手挑的 7 个（含 DIY） |
 | 14 | `c047a78adf` | feat: 组件单独调尺寸 + 隐藏名称 | `singleWidgetSizes` / `singleWidgetLabels` |
 | 15 | `f741b40290` | fix: 目录标题/搜索框被滚出视野 | 本次主线，见 K1 【待验证】 |
+| 16 | `ffc11d4e60` | fix: 目录顶部让位改用壳实测状态栏高度 | `--status-bar-height` 从未定义，见 U2 |
+| 17 | `9402b7146d` | revert: 回滚 `.ds-directory` 的合成层改动 | 恢复 `contain: paint` / `translateY`，见 K1 |
+| 18 | `b04b50cf51` | revert: 撤掉键盘逐帧跟随 | 真机卡顿，见 K11 【实证】 |
+| 19 | `6d6ff117a8` | fix(shell): 升 versionCode/Name + UA 对齐 | 见 K12，否则新包装不上 |
 
 ---
 
@@ -686,6 +690,12 @@ if (keyboardInset < 80) {
 5. **遇到「时有时无」，先找"什么在变"**——很可能是滚动位置、变量、或缓存，
    而不是布局本身。（K1 就是这样，一开始全班人马都在查布局）
 6. **文档比记忆可靠。** 尤其是"为什么这么改"，隔一天就忘。
+7. **按帧触发的性能改动默认不做。** 入场优化再漂亮，只要每帧触发就会拖累常态交互；
+   能在代码层面推出的代价，不要拿用户的真机去验。（K11）
+8. **验证之前先确认"跑的是哪个包"。** UA 版本号 / `typeof window.AndroidShell`
+   两行就能排除"改了却没生效"这一大类假象——本轮 UA 就曾长期错报版本。（K12）
+9. **排查前先说清环境：壳内还是浏览器。** 原生代码在浏览器里一行都不执行，
+   搞错这一条，整条推理链会全部作废。
 
 ---
 
@@ -880,3 +890,157 @@ item.glassIcon ? <GlassIcon name={item.glassIcon} />
 
 **连带影响**：所有桌面组件的名字标签都变了（多页桌面也受影响，不只是单页）。
 若有人反馈"组件下面的文字变了/不见了"，这是**预期的修复**，不是新 bug。
+
+---
+
+## 十、K11 / K12（2026-10-17 第二轮：一次失败的性能优化 + 一条版本链路坑）
+
+> 这一节接在「九」之后，编号继续。两件事都不是单页桌面的功能问题，
+> 但都会在下一次排查时把你带偏，所以单独记。
+
+### K11. 键盘「逐帧跟随」：看着像优化，实际是每帧 reflow 【实证 · 已回滚】
+
+**做了什么**
+
+把键盘让位从「变化时写一次底部内边距」改成「按系统动画逐帧插值写」：
+
+```kotlin
+// 已删除的实现（曾在 b04b50cf51 前存在）
+ViewCompat.setWindowInsetsAnimationCallback(window.decorView,
+  object : WindowInsetsAnimationCompat.Callback(DISPATCH_MODE_CONTINUE_ON_SUBTREE) {
+    override fun onProgress(insets, runningAnimations): WindowInsetsCompat {
+      val target = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
+      applyImePadding(imeAnimFromPx + ((target - imeAnimFromPx) * animation.interpolatedFraction).roundToInt())
+      return insets
+    }
+  })
+```
+
+出发点是对的：只挂 `OnApplyWindowInsetsListener` 时，Android 11+ 要等动画收尾才派发终值，
+输入栏是「后让位、一次跳到位」，有跳变观感。
+
+**真机结果：卡。** 用户反馈「问题没解决，然而卡卡的」。已整体回滚（`b04b50cf51`）。
+
+**为什么必然卡（不需要实测就能推出来，这才是教训）**
+
+1. 每次 `setPadding` = 一次 `requestLayout`。逐帧 = **每秒 60 次布局**。
+2. WebView 高度每帧变化 → 网页收到 60 次/秒 `resize`。
+3. 网页侧 `useAndroidNativeKeyboardViewport` 监听 `window.resize`，
+   每次都写 `--phone-screen-height` → 再触发一轮样式重算 + 重排。
+4. 这条链还正好喂在 **K1 那条未定位的竞态**上（键盘变更 → resize → 改 CSS 变量 → 重绘不稳定）。
+
+于是：为一个入场动画，牺牲了**常态**流畅度，同时给未定位的 bug 增加了 60 倍触发源。
+
+**结论 / 以后的规矩**
+
+- 键盘让位恢复「变化时落一次终值」，跳变不好看但可预期。
+- **要做跟手，先解决"每帧 reflow"这个根本代价**——例如只动 `transform`
+  （不参与布局，可走合成器）而不是改容器尺寸/padding。直接在回调里改 padding 这条路是死的。
+- 更普适的一条：**评估性能改动要区分「入场/瞬时」与「常态」**。
+  入场优化再漂亮，只要按帧触发就会拖累每一次交互。
+  这类改动应该**默认不做**，等有明确的真机收益证据再说，而不是"先上真机看看"——
+  代价由用户的时间和手感来付，得到的却是一个本来就能推出来的结论。
+
+### K12. 壳的版本链路：装不上、也认不出跑的是哪个包 【实证 · 已修】
+
+改 `android-shell/` 是**必须重打包重装**的（K3），于是这条链路上每个环节都会咬人。
+本轮连续踩到三处，全部已修：
+
+**① APK 只在 push 到 `main` 时构建**（`.github/workflows/android-shell.yml`）
+
+```yaml
+push:
+  branches: [main]
+  paths: ["android-shell/**", ".github/workflows/android-shell.yml"]
+```
+
+在 `dev-ui` 上改原生代码 → **不会触发构建**。表现是"我改了，重新装还是老样子"。
+两条出路：合到 `main`，或用 `workflow_dispatch` 手动跑（可指定 `site_url`，
+但换 host = 换 origin = 空环境，见 K3）。
+
+**② `versionCode` 不递增 = 新包装不上**
+
+`build.gradle` 自己写着：
+
+> versionCode 必须严格递增，否则 Android 拒绝覆盖安装（表现为「应用未安装」）。
+
+回滚时只改代码、没动版本号，新包能编出来但**装不上**，而报错文案是「应用未安装」——
+极容易被误判成"包有问题"或"回滚无效"。已升到 `versionCode 12 / versionName 1.0.13`。
+
+**③ UA 里的版本号在骗人**
+
+```kotlin
+// 修前
+const val VERSION = "1.0.10"   // build.gradle 里 versionName 已经是 1.0.12
+userAgentString = "$userAgentString FloatShell/$VERSION"
+```
+
+`VERSION` 拼进 WebView 的 UA，却与 `versionName` 长期不一致。
+后果：**排查"手机上跑的是不是最新包"这条线索彻底失效**——你以为在验证新代码，
+实际看的是旧版的 UA。已对齐为 `1.0.13`，升版时**两处必须一起改**。
+
+**零成本确认「跑的是哪个包」**：壳内控制台看
+
+```js
+navigator.userAgent           // 末尾应是 FloatShell/1.0.13
+typeof window.AndroidShell    // "object" = 在壳里；"undefined" = 在浏览器
+```
+
+浏览器里跑原生代码的改动**一行都不会执行**，这一点会让排查方向完全跑偏
+（本轮一度差点把浏览器当壳来怀疑，见下方 §11.3）。
+
+---
+
+## 十一、2026-10-17 第二轮实测记录（交接用）
+
+### 11.1 本轮做了什么（4 个提交，全部在 dev-ui）
+
+| 提交 | 内容 | 状态 |
+|---|---|---|
+| `ffc11d4e60` | `.ds-directory` 顶部让位改读 `--android-shell-status-bar-height` | 保留 |
+| `9402b7146d` | 回滚 `contain: paint` / `translateY`（K1 证伪的盲测） | 已还原 |
+| `b04b50cf51` | 撤掉键盘逐帧跟随（K11） | 已还原 |
+| `6d6ff117a8` | 升 versionCode/Name + UA 对齐（K12） | 保留 |
+
+同批还保留了一处**纯 CSS 的独立改进**：`.ds-directory` 底色去掉
+`color-mix(… 99%, transparent)`，改完全不透明（与 K6 同向，不涉及合成层假设）。
+
+### 11.2 没有解决的：K1 原样未动
+
+**必须说清楚**：本轮**没有修复 K1**（点搜索框 → 标题/搜索框消失）。
+回滚那两条 CSS 之后，它回到了未修复的原始状态。原因是本台账实验 3 / B
+已经证伪了 CSS 盲测这条路线（删 `contain: paint` 只是把故障时机对调）。
+
+唯一算修的显示类问题是 U2（状态栏高度），它和 K1 无关。
+
+### 11.3 【待验证】状态栏高度接线是否生效
+
+改法是让 `.ds-directory` 优先读壳注入的实测值：
+
+```css
+padding: calc(var(--android-shell-status-bar-height, var(--status-bar-height, 36px)) + 12px) …;
+```
+
+**验证方法（不用重装 APK，网页部署即生效）**——壳内控制台：
+
+```js
+getComputedStyle(document.documentElement).getPropertyValue('--android-shell-status-bar-height')
+getComputedStyle(document.querySelector('.ds-directory')).paddingTop
+```
+
+- 第一行**有数值**（如 `28px` / `30px`）= 注入通了、CSS 接上了；
+  第二行应等于它 + 12px。此时目录顶部留白在各机型才真正贴合。
+- 第一行**为空** = `injectStatusBarHeight()` 没跑起来（注意它内部有
+  `statusBarHeightCssPx > 0` 的前置判断，取不到就静默不发）。这属于原生层问题，
+  要看 Logcat，不是网页能修的。
+
+⚠️ 这条**截至本轮结束尚未真机确认**，下次上来第一件事就是跑上面两行。
+
+### 11.4 下次继续的入口（按优先级）
+
+1. **先确认装的是新包**（K12 的 UA 检查）——否则后面一切结论都不可信；
+2. 验证 11.3 那两行 console 输出；
+3. 再攻 K1：按 U1 的诊断脚本（键盘弹起状态下列出所有 `scrollTop != 0` 的元素），
+   一次定位，不再做 CSS 盲测；
+4. 顺带对比 `b.css`（约 300k，几乎全 `!important`）在 / 不在时的流畅度差异 ——
+   它是常态卡顿的独立嫌疑，与本轮原生改动无关（K7）。
