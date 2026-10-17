@@ -227,7 +227,11 @@
   display: flex;
   flex-direction: column;
   padding: calc(var(--status-bar-height, 36px) + 12px) 14px 18px;
-  overflow: hidden;
+  /* 目录页是整屏覆盖层，本身不该滚动（滚动交给内部的 .ds-dir-scroll）。
+     hidden 会让它变成「隐藏的可滚动容器」，点搜索框时浏览器把整页滚走、标题消失；
+     clip 同样裁掉溢出，但不能被 focus scroll 滚动。
+     ⚠️ 下面的 .ds-dir-scroll 是真正的滚动区，必须保持 auto，不要跟着改。 */
+  overflow: clip;
   /* 几乎不透明，且刻意不用 backdrop-filter：
      目录整页本来就是独立页面，透出桌面没有意义；而整页模糊会和卡内每个图标的
      模糊形成"嵌套模糊"，滚动时每帧都要重新采样，是掉帧的主因。 */
