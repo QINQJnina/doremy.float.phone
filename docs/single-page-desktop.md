@@ -168,6 +168,7 @@ focus scroll 动不了它。
 | 2 | 清缓存 + 重新放同款 clip | 键盘弹出 → 标题/搜索框/返回键**消失但可交互** |
 | 3 | 实验 C：再加 `.ds-directory{contain:none!important}` | **现象翻转**：弹出→出现，收起→**消失但可交互** |
 | 4 | 实验 C+A：再加 `html,body{overflow:clip!important}` | **更混乱**：弹出/收起两种状态都随机出现/消失 |
+| 5 | 实验 C+A+B：再加 `.phone-shell-wrap{transform:none!important;will-change:auto!important}` | **仍混乱**：键盘正常弹出收起，功能全在，可见性随机 |
 
 **核心观察（用户原话）**：键盘出现和消失会"刷新"什么——每次键盘状态变化触发
 resize → 两个 hook 改 CSS 变量 → 重排/重绘，**而重绘结果不稳定（竞态）**。
@@ -202,6 +203,38 @@ resize → 两个 hook 改 CSS 变量 → 重排/重绘，**而重绘结果不�
   （改 margin-top）或去掉 `will-change: transform` 让浏览器自行降层。
 - B 仍无效 → 合成层假设不成立，需 `chrome://inspect` 在弹出/收起两态逐一读 computed 值，
   CSS 盲测已接近边际效益递减。
+
+**实验 B 结果（2026-10-17）：仍混乱 → 合成层假设不成立，已放弃 CSS 盲测。**
+
+**两个决定性新事实（用户补充，改写根因方向）**：
+
+1. **不只是头部，分组内容也一起随机消失**——不是"头部三元素被盖住"的局部问题，
+   是整个 `.ds-directory` 内容体（头 + 搜索 + 分组图标）整体可见性随机。
+2. **这些临时 CSS 都是在"已去掉 b.css"的状态下测的**——此前「b.css 在场就正常、
+   看不出区别」的观感，与「去掉 b.css 就乱」指向同一件事：见下。
+
+**重新定性（比"合成层"更根本的假设）**：
+
+`.ds-directory` 是 `position:absolute; inset:0; z-index:700` 的整屏覆盖层。
+它**依赖父级 `.phone-shell` 正常参与绘制**。而 `.phone-shell` 在移动端媒体查询里
+`width:100vw; height:100lvh`（`100lvh` 不随键盘变化）。键盘弹出/收起时布局视口高度在变、
+壳高度却锁死 lvh → 覆盖层的可见区域/裁剪边界随之漂移。
+
+`b.css` 在场时恰好把它"稳定住"了（很可能是它给 `.phone-shell` 或目录相关层级
+强加了背景/层级/尺寸的 `!important` 规则），**这不是 b.css 修好了，而是 b.css 掩盖了它**。
+
+**下一步：停止 CSS 盲测，等电脑用 chrome://inspect 精确诊断**。要读的值（键盘弹出/收起各抓一次）：
+
+| 元素 | 要读的属性 |
+|---|---|
+| `html` / `body` | `scrollTop`、`clientHeight`、`scrollHeight` |
+| `.phone-shell-wrap` | `transform`、`margin-top` |
+| `.phone-shell` | `height`、`offsetHeight`、`clientHeight` |
+| `.ds-directory` | `getBoundingClientRect()`、`opacity`、`visibility`、`z-index`、`overflow` |
+| `:root` | `--phone-screen-height`、`--mobile-keyboard-lift`、`--status-bar-drop` |
+
+尤其 `--phone-screen-height`（JS 用 `innerHeight + drop` 动态写）与
+`100lvh`（`.phone-shell` 的 height）之间的**不一致**，是最可能暴露真凶的位置。
 
 ---
 
