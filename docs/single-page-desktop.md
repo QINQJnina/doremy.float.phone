@@ -173,7 +173,7 @@ focus scroll 动不了它。
 
 ---
 
-### K2. 「Chrome 里好看，App 里不对」的两个层次 【实证】
+### K2. 「Chrome 里好看，App 里不对」的两个层次 【实证 · 已真机验证】
 
 **第一层：跑的不是同一套媒体查询**
 
@@ -217,7 +217,12 @@ window.matchMedia("(max-width: 500px) and (hover: none) and (pointer: coarse)").
 }
 ```
 
-实测结果：**≤360px 分支**（蓝字）。
+**实测结果：≤360px 分支（蓝字）**——2026-10-17 在安卓壳内实测，确认本机命中
+`max-width: 360px` 这一支，而桌面 390px 机模不命中。**这条已从推断升为实证。**
+
+> 附带的推论：既然本机命中 `b.css` 的 `@media(max-width:360px)`，
+> 那份第三方 CSS 里所有 360 分支的规则（如 `.feed-post` 边框 33px→29px）
+> **在你的机器上是生效的**，而在桌面上看不到——这也是"两边不一样"的一部分。
 
 ---
 
@@ -493,7 +498,7 @@ body {
 **若要试**：`html, body { overflow: clip }`，风险是可能影响移动端 Safari 的
 视口行为（`-webkit-overflow-scrolling`），只在安卓壳内验证即可，别当成通用修复。
 
-### U2. `--status-bar-height` 与「状态栏位置」的关系 【半实证】
+### U2. `--status-bar-height` 与「状态栏位置」的关系 【代码层已实证 / 真机观察待解释】
 
 曾观察到「顶部偏移 12px 时标题在、4px 时不在」，但按代码：
 
@@ -504,10 +509,26 @@ body {
 只读 `--status-bar-height`，**不读**「状态栏位置」`--status-bar-top`。
 理论上调「状态栏位置」动不到目录顶部。
 
-→ 需确认当时调的到底是「状态栏位置」还是「状态栏占位上移」，或存在第三条链路。
-（在 K1 已修的前提下，这个观察现在可能已不成立，需重测。）
+**代码层已证实（`styles/tokens.css` + `styles/desktop-single.css`）**：
 
-### U3. 键盘 hook 与 CSS 的契约 【半实证】
+| 变量 | 谁在用 | `.ds-directory` 用吗 |
+|---|---|---|
+| `--status-bar-height`（默认 36px） | `.phone-status-bar` 高度、`--phone-titlebar-safe-top` | ✅ **用**（`padding-top`） |
+| `--status-bar-top`（默认 12px，「状态栏位置」） | 仅 `.phone-status-bar { top }` 与 `--phone-titlebar-safe-top` | ❌ **不用** |
+
+即：**调「状态栏位置」在 CSS 层面动不到目录页顶部。** 这一条不再是推断。
+
+**仍然待解释的**：那当时「12px 时标题在、4px 时不在」调的究竟是什么？
+三件独立的可能，需真机复测才能定：
+
+1. 调的其实是「状态栏占位上移」（`statusBarDropPx`）→ 但用户说该项一直是 0，未取信
+2. 调的是 `b.css` 或自定义 CSS 里 `.ds-directory` 的 padding 数值本身
+3. **那两个观察本身都是 K1 的表现**（focus scroll 随机出现），只是当时被误归因成偏移值
+
+→ 在 K1 修好之后重测：把「状态栏位置」分别设 12px / 4px，各测一次
+**不聚焦**与**聚焦搜索框**两种状态，才是有效对照。
+
+### U3. 键盘 hook 与 CSS 的契约 【代码层已实证：不一致确实存在，但当前路径无害】
 
 本 fork 的 `phone-shell.css` 现在是：
 
@@ -519,9 +540,34 @@ transform: translate3d(0, calc(-1 * var(--mobile-keyboard-lift, 0px)), 0);
 而 `desktop-shell.tsx` 第 1021 行注释写的是「抬升已改用 margin-top（真实布局位移）实现」。
 **注释与实现不一致**。
 
-但逻辑推演：键盘触发原生压缩时 `data-native-kb-resize === "1"` 会强制 `applyLift(0)`，
-此时 `--mobile-keyboard-lift` 恒为 0，两种写法结果相同 → **在原生压缩路径上无害**。
-是否需要统一，等 U1 结论出来再定，别在没定性前乱动。
+**已读码证实（`desktop-shell.tsx` 第 973–1002 行）**，`update()` 有三处提前 `applyLift(0); return;`：
+
+```js
+if (!element || document.activeElement !== element || !mobileMq.matches || !viewport) {
+  applyLift(0); return;                       // ① 失焦 / 非移动端 → 清零
+}
+if (document.documentElement.dataset.nativeKbResize === "1") {
+  applyLift(0); return;                       // ② 原生压缩已接管 → 清零
+}
+if (keyboardInset < 80) {
+  applyLift(0); return;                       // ③ 键盘没起来 → 清零
+}
+```
+
+**结论（可以确定的两点）**：
+
+1. **失焦会清零**。`handleFocusOut` → `requestUpdate()` → `update()` 走分支 ① → `applyLift(0)`。
+   之前担心的「失焦没清、lift 永久留下」**不成立**。
+2. **原生压缩路径上 lift 恒为 0**。分支 ② 命中时，`--mobile-keyboard-lift` 被移除，
+   CSS 写成 `transform` 还是 `margin-top` **结果完全相同**。
+
+所以 U3 的契约不一致**是真实存在的**（注释与实现不同步），
+**但它不是当前故障的成因**，属于"技术债"，可以以后再统一，不必现在动。
+
+**唯一残留风险**：若浏览器**不支持** `interactive-widget=resizes-content`，
+`nativeKbResize` 永不置位 → 走手动抬升 → `transform` 视觉位移生效
+→ 那套「hit-test 与视觉错位」的老问题会回来。你的 WebView 是 Chrome 116，支持该属性，当前不受影响。
+（可用 `chrome://inspect` 看 `document.documentElement.dataset.nativeKbResize` 弹键盘时是否为 `"1"`。）
 
 ### U4. 是否把 K1 的通用部分提给上游 【待定】
 
@@ -688,6 +734,39 @@ const builtin = (Object.keys(ICONS) as IconId[]);
 
 **排查提示**：如果**设置页 / 外观页**的卡片图标出现异常，
 第一嫌疑就是这个文件——它不在单页的样式隔离范围内（`.desktop-single` 前缀管不到它）。
+
+#### ⚠️ K9 附：`FeaturedCard` 没有跟进加保护（潜在崩溃点，已读码确认）
+
+`CardGrid` 做了 `Icon ? <Icon/> : null` 的空值保护，但**同文件的 `FeaturedCard` 没有**：
+
+```ts
+// 第 75 行：注意这里 icon 沿用了 CardItem 的可选定义
+export type FeaturedCardItem = CardItem & { desc: string };
+
+// 第 77–89 行：没有 null 保护
+export function FeaturedCard({ item }: { item: FeaturedCardItem }) {
+  const Icon = item.icon;                        // ← 可能是 undefined
+  ...
+  {item.glassIcon ? <GlassIcon name={item.glassIcon} /> : <Icon size={22} />}   // ← 直接当组件用
+}
+```
+
+因为 `CardItem.icon` 从**必填改成了可选**，`FeaturedCardItem` 跟着变可选，
+但 `FeaturedCard` 仍然无条件渲染 `<Icon />`。
+
+- **现在没有崩**：所有调用 `FeaturedCard` 的地方都还传着 `icon`，运行时不会触发
+- **但类型层面已经松了**：以后谁给 `FeaturedCard` 传一个只有 `glassIcon` 的 item，
+  会直接报 `Element type is invalid`——而且是运行时崩，TS 不拦
+
+**若要补**（一行）：
+
+```ts
+item.glassIcon ? <GlassIcon name={item.glassIcon} />
+  : Icon ? <Icon size={22} strokeWidth={1.75} /> : null
+```
+
+**结论**：K9 的改动方向没问题（向后兼容、老调用方行为不变），
+但 `FeaturedCard` 这处是**同一次改动留下的不对称**，属于已知隐患而非当前故障。
 
 ### K10. 修掉了组件名占位的旧 bug 【实证】
 
