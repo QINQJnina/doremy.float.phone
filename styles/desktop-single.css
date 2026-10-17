@@ -240,24 +240,27 @@
      clip 同样裁掉溢出，但不能被 focus scroll 滚动。
      ⚠️ 下面的 .ds-dir-scroll 是真正的滚动区，必须保持 auto，不要跟着改。 */
   overflow: clip;
-  /* 完全不透明，且刻意不用 backdrop-filter：
+  /* 底色用完全不透明、且不用 backdrop-filter：
      目录整页本来就是独立页面，透出桌面没有意义；而整页模糊会和卡内每个图标的
-     模糊形成"嵌套模糊"，滚动时每帧都要重新采样，是掉帧的主因。
-     底色直接取变量原值，不再 color-mix(… 99%, transparent)：哪怕只掺 1% 透明，
-     这一层也会走「半透明合成」路径——先与桌面层合成，卡内元素再往上叠。 */
+     模糊形成"嵌套模糊"，滚动时每帧都要重新采样，是掉帧的主因（见 K6）。
+     直接取变量原值，不再 color-mix(… 99%, transparent)：哪怕只掺 1% 透明，
+     这一层也会走「半透明合成」路径。这条与 K6「整页底色改为近乎不透明」同向，
+     和下面两条（contain / transform 的合成层实验）性质不同，故保留。 */
   background: var(--c-page-body-bg, #f1f2f6);
-  /* 入场只做淡入。原来还带 translateY(14px)，但 transform 动画会把这一层锁成
-     固定尺寸的合成层：它本身是 inset:0 的整页覆盖层，尺寸随键盘/容器变化，
-     锁住后 resize 时既不重排也不重建，于是背景与内容错位、并伴随逐帧重绘。
-     opacity 动画不需要 transform，也就没有这个副作用。
-     （同理，这里不再用 contain: paint：合成层缓存会在这类 resize 时反复失效重建，
-     既是错位的来源，也是卡顿的来源。） */
+  /* ⚠️ contain: paint 与下面的 translateY 曾经被拿掉，现已按 docs 的 K1 记录回滚。
+     K1 实验 3 实测：只去掉 contain: paint 会让故障**形态翻转**——从「键盘弹起时
+     标题消失」变成「键盘收起时消失但可交互」。这说明它是影响因素之一而非唯一因素，
+     单独删掉并不修 bug，只是把症状换个时机出现。实验 B 又证实合成层假设不成立，
+     文档结论是「停止 CSS 盲测，等 chrome://inspect 精确定位」。
+     所以这里维持原样（合成层缓存 + transform 动画），别再把它们当性能优化删掉——
+     否则会以「看起来是优化、实际只是换了故障时机」的方式重新引入问题。 */
+  contain: paint;
   animation: dsDirectoryIn 220ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 @keyframes dsDirectoryIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 /* 目录里的卡片：底下已经是不透明的整页底色，再叠加模糊看不出差别，只会白耗性能 */
