@@ -53,14 +53,22 @@
 
 ### 2.1 涉及文件 【实证】
 
-| 文件 | 职责 |
-|---|---|
-| `components/desktop-shell.tsx` | 桌面壳主体；单页/目录的渲染、状态、键盘 hook 都在这里 |
-| `lib/desktop-layout-storage.ts` | 形态持久化（键 `ai_phone_desktop_view_mode_v1`）、dock/单页清单存取 |
-| `styles/desktop-single.css` | 单页形态专属样式，选择器全部限定在 `.desktop-single` / `.ds-*` |
-| `styles/phone-shell.css` | 手机外壳、移动端媒体查询、`.app-root` |
-| `lib/theme-types.ts` | `ThemeProfile.statusBarDropPx`（「状态栏占位上移」） |
-| `lib/kv-db.ts` | 主题配置实际存在 IndexedDB 的 `AiPhoneKvDB`，键 `ai_phone_theme_profile_v1` |
+**本功能相对上游 `doremy1203:main` 共改动 9 个文件**（据完整 diff 核对）：
+
+| 文件 | 性质 | 职责 |
+|---|---|---|
+| `styles/desktop-single.css` | **新增 485 行** | 单页形态专属样式，选择器全部限定在 `.desktop-single` / `.ds-*` |
+| `components/desktop-shell.tsx` | 改 | 桌面壳主体；单页/目录渲染、状态、三个 render 函数、键盘 hook |
+| `components/phone-theme-app.tsx` | 改 | 主题 App 新增「桌面形态」分区（`DesktopModePage`） |
+| `lib/desktop-layout-storage.ts` | 改 | 5 个新存储键的读写 |
+| `lib/widget-types.ts` | 改 | 单页组件目录、推荐尺寸、出厂默认 |
+| `components/ui/card-grid.tsx` | 改 ⚠️ **共享组件** | `icon` 改可选 + 新增 `iconNode`，见 K9 |
+| `components/widgets/widget-renderer.tsx` | 改 | 修掉字面量 "widgets" 占位文字，见 K10 |
+| `styles/phone-shell.css` | 改 | 两处 `overflow: hidden → clip`（详见 K1） |
+| `app/globals.css` | 改 | 仅新增一行 `@import "../styles/desktop-single.css"` |
+
+**注意：`lib/theme-types.ts` 与 `lib/kv-db.ts` 本次没有改动**，它们是既有依赖
+（`statusBarDropPx`、`AiPhoneKvDB` 都是上游原有）。
 
 ### 2.2 形态切换 【实证】
 
@@ -413,11 +421,77 @@ grep -nE '::(before|after) *\{' b.css | grep -E 'width|height|aspect-ratio'
 - 代码已提交：`f741b40290` → PR #3 合入 main
 - **用户反馈：生产构建后在 App 里打开仍然不行**
 - 但临时 CSS 对照实验是实测有效的，所以最可能是「新代码没真的跑起来」而非「修复无效」
+- **2026-10-17 更新（重要）**：拿到 `doremy1203:main...main` 完整 diff 后确认，
+  三处 `overflow: clip` **确实都在 main 上**（`.phone-shell`、`.app-root`、`.ds-directory`）。
+  也就是说「代码没推上去」这条**已排除**，剩下两种可能：
+  - **A. 部署/缓存**导致手机实际跑的还是旧 CSS
+  - **B. K1 结论不完整**——真正被滚的容器不在这三处里，见 U5
+
 - **下次优先确认（按顺序）**：
-  1. 临时那 3 行 `overflow: clip` CSS 是否还在主题配置里？还在 = 症状已不是 K1；已删 = 大概率缓存
-  2. Netlify Deploys 最新 commit 是否为 `3721034145` / `f741b40290`
-  3. 硬清缓存 / 换无痕窗口 / 在 `chrome://inspect` 里看 `getComputedStyle(.ds-directory).overflow` 是否为 `clip`
-  4. 若 `overflow` 确实是 `clip` 但问题仍在 → **K1 结论需要修正**，重新做 ①② 分诊
+  1. 先看 U5：`html, body` 仍是 `overflow: hidden`，是唯一没改的祖先
+  2. 临时那 3 行 `overflow: clip` CSS 是否还在主题配置里？还在 = 症状已不是 K1；已删 = 大概率缓存
+  3. Netlify Deploys 最新 commit 是否为 `3721034145` / `f741b40290`
+  4. 硬清缓存 / 换无痕窗口 / 在 `chrome://inspect` 里看 `getComputedStyle(.ds-directory).overflow` 是否为 `clip`
+  5. 若 `overflow` 确实是 `clip` 但问题仍在 → **K1 结论需要修正**，重新做 ①② 分诊
+
+**决定性诊断（一次定位，不再猜）**：在 `chrome://inspect` 的 Console 里，
+点搜索框（键盘弹起）状态下执行：
+
+```js
+// 找出所有 scrollTop 不为 0 的元素——那就是真正被 focus scroll 滚走的容器
+const scrolled = [];
+document.querySelectorAll('*').forEach(el => {
+  if (el.scrollTop > 0 || el.scrollLeft > 0) {
+    scrolled.push({
+      元素: el.tagName.toLowerCase() +
+            (el.id ? '#' + el.id : '') +
+            (el.className && typeof el.className === 'string'
+              ? '.' + el.className.trim().split(/\s+/).join('.') : ''),
+      scrollTop: el.scrollTop,
+      overflow: getComputedStyle(el).overflow,
+    });
+  }
+});
+console.table(scrolled);
+// 额外看一眼文档级滚动（html/body 是最后的兜底）
+console.log('html.scrollTop =', document.documentElement.scrollTop,
+            '| body.scrollTop =', document.body.scrollTop,
+            '| scrollingElement =', document.scrollingElement?.tagName);
+```
+
+**哪一行不为 0，就锁定了哪一个容器**，比我继续推理可靠。
+
+
+### U5. `html, body` 仍是 `overflow: hidden` 【推断，待验证】
+
+三处改完后，整条祖先链上**唯一还留着 `overflow: hidden` 的是 `html, body`**：
+
+```css
+/* styles/phone-shell.css 移动端媒体查询内，本次未改动 */
+html,
+body {
+  overflow: hidden;
+  width: 100%;
+  height: 100lvh;      /* ← 关键：lvh = 最大视口高，键盘弹出时不变 */
+  background: var(--c-page-body-bg);
+}
+```
+
+**为什么会残留问题**：
+- `lvh` 是**最大值**，键盘弹出、布局视口变小时它**不变**
+- 于是文档高度（100lvh）> 当前布局视口高度 → `html` / `body` 仍然**可被程序化滚动**
+- 输入框聚焦时，浏览器找不到更近的可滚祖先时，会退回滚动 `html`/`body`
+
+**为什么这条只是【推断】而不是结论**：
+用户的临时实验（`.app-root` / `.phone-shell` / `.ds-directory` 加 `clip`）**实测有效**。
+若真正被滚的是 `html`/`body`，那个实验不该起效。所以要么：
+- 实验期间浏览器滚的确实是 `.app-root`，而源码部署后没生效（回到 U1-A 缓存）
+- 要么还有别的条件差异
+
+→ **不要直接改**。先用 U1 的决定性诊断跑出结果，再决定要不要给 `html, body` 也上 `clip`。
+
+**若要试**：`html, body { overflow: clip }`，风险是可能影响移动端 Safari 的
+视口行为（`-webkit-overflow-scrolling`），只在安卓壳内验证即可，别当成通用修复。
 
 ### U2. `--status-bar-height` 与「状态栏位置」的关系 【半实证】
 
@@ -466,3 +540,164 @@ transform: translate3d(0, calc(-1 * var(--mobile-keyboard-lift, 0px)), 0);
 5. **遇到「时有时无」，先找"什么在变"**——很可能是滚动位置、变量、或缓存，
    而不是布局本身。（K1 就是这样，一开始全班人马都在查布局）
 6. **文档比记忆可靠。** 尤其是"为什么这么改"，隔一天就忘。
+
+---
+
+## 八、完整改动清单（依据 `doremy1203:main...main` 完整 diff）
+
+这一节按文件逐条列净改动，供"我到底加了什么"的快速核对。
+
+### 8.1 存储键（全部新增，与多页布局完全隔离）【实证】
+
+| 键 | 内容 | 读取函数 |
+|---|---|---|
+| `ai_phone_desktop_view_mode_v1` | `"paged"` / `"single"` | `loadDesktopViewMode()` |
+| `ai_phone_single_favorites_v1` | 单页「常用」图标 id 数组 | `loadSingleFavorites()` |
+| `ai_phone_single_widgets_v1` | 单页组件类型字符串数组 | `loadSingleWidgets()` |
+| `ai_phone_single_widget_sizes_v1` | `{ 类型: 尺寸 }` 覆盖表 | `loadSingleWidgetSizes()` |
+| `ai_phone_single_widget_labels_v1` | 布尔，是否显示组件名 | `loadSingleWidgetLabelsVisible()` |
+
+每个键都 `registerKvMigration(...)` 注册过，会被 `hydrateKvDb` 从 localStorage 迁进 IndexedDB。
+
+**「从未设置过」用 `null` 表达**：
+
+```ts
+/** 读取单页「常用」清单；从未设置过时返回 null（调用方自行决定默认值）。 */
+export function loadSingleFavorites(): DesktopIconId[] | null
+```
+
+调用方据此区分「用户清空成空数组」和「从没配过、该给出厂默认」。
+`loadSingleWidgets()` 同理。而 `loadSingleWidgetLabelsVisible()` 默认 `true`，
+`loadSingleWidgetSizes()` 默认 `{}`（缺项回落到组件推荐尺寸）。
+
+### 8.2 出厂默认与首次水合 【实证】
+
+```ts
+// desktop-shell.tsx
+const singleContentReadyRef = useRef(false);
+
+useEffect(() => {
+  if (singleContentReadyRef.current || !desktopReady) return;  // 只跑一次，且必须等桌面数据就绪
+  singleContentReadyRef.current = true;
+  const storedFavorites = loadSingleFavorites();
+  const storedWidgets = loadSingleWidgets();
+  setSingleFavorites(storedFavorites ?? (layout.page1 ?? []).map(item => item.id));
+  setSingleWidgets(storedWidgets ?? DEFAULT_SINGLE_PAGE_WIDGETS);
+  ...
+}, [desktopReady, layout]);
+```
+
+- 常用默认 = **多页第一页的图标**（`layout.page1`），`null` 才回落到这里
+- 组件默认 = `DEFAULT_SINGLE_PAGE_WIDGETS` = `["largeTime", "calendar", "mascot"]`
+
+> ⚠️ 特别注意 `!desktopReady` 这个前置条件。`singleContentReadyRef` 一旦置 true 就不再跑，
+> 如果哪天桌面数据水合变慢、而这个 effect 提前跑过，就会永久用上"空的 page1"当默认值。
+> 这是单页「常用」莫名变空时第一个要怀疑的点。
+
+### 8.3 单页组件的尺寸规则 【实证】
+
+```ts
+// lib/widget-types.ts
+export function resolveSingleWidgetSize(type: string): WidgetSize {
+  if (type === "calendar") return "3x2";        // 特例
+  const entry = WIDGET_CATALOG.find((item) => item.type === type);
+  return entry?.size ?? "2x2";
+}
+```
+
+**日历为什么是特例（3x2）**——源码注释原文：
+
+> 2x2 里要塞 7 行（星期表头 + 最多 6 周日期），扣掉上下留白每行只剩约 11px，
+> 而日期字号是 9px，行距几乎为零。单页给它 3x2（宽度不变、多一格行高），每行约 21px。
+
+即：**这是"2x2 装不下 7 行"的必然结果，不是审美选择。** 别随手改回 2x2。
+
+另外：
+
+- `SINGLE_PAGE_WIDGET_CATALOG` = 完整 `WIDGET_CATALOG` 映射，含 `freestyle` 标记
+- 尺寸覆盖**只对标准组件开放**，自由艺术 / DIY 组件形状是设计死的，改尺寸会变形
+- 主题 App 给的尺寸档位：`["1x4", "2x2", "3x2", "2x4", "4x4"]`
+
+### 8.4 三个 render 函数的分工 【实证】
+
+| 函数 | 用在哪 | 特点 |
+|---|---|---|
+| `renderSingleIcon(iconId)` | 目录格子、文件夹兜底 | 外观与多页图标同款，但**不挂长按拖拽** |
+| `renderCardIconNode(iconId)` | 单页「常用」卡片 | 画进 `.card-icon` 圆底，图片优先、否则 glyph |
+| `renderDirectoryIcon(iconId)` | 目录格子 | = `renderSingleIcon` + 右上角「钉进常用」星标 |
+
+**为什么单页不挂拖拽**（源码注释）：
+
+> 单页与目录页里的图标：外观与多页图标完全同款……但不挂多页那套长按拖拽——
+> 这两处都是列表，拖拽排布请切回分页桌面做。
+
+星标是**绝对定位**的（`.ds-pin`），不占布局，所以格子尺寸与普通图标完全一致。
+
+### 8.5 应用目录的分组逻辑 【实证】
+
+```ts
+const custom  = customApps.map(app => toCustomAppIconId(app.id));
+const builtin = (Object.keys(ICONS) as IconId[]);
+// 只有两组：「我的应用」/「内置应用」
+```
+
+**注意三个"不包含"**（容易误判成 bug）：
+
+1. **不包含 Dock 上的图标**——Dock 是 `dock` 数组，与 `ICONS` 无关
+2. **不包含文件夹**——`isFolderIconId` 的直接 `return null`
+3. **不包含已卸载/未知的 icon**——`getDesktopIconMeta` 拿不到就跳过
+
+搜索是按 `meta.label`（中文名）和 `iconId` 两者做小写包含匹配。
+
+### 8.6 `card-grid` 的改动（共享组件，风险点）【实证】→ 见 K9
+
+### 8.7 `widget-renderer` 的改动 【实证】→ 见 K10
+
+---
+
+## 九、K9 / K10（从完整 diff 新发现的两处）
+
+### K9. 改动了共享组件 `components/ui/card-grid.tsx` 【实证】
+
+这个组件**不只为单页服务**，设置页、外观页都在用它。改动是**向后兼容**的：
+
+```diff
+ export type CardItem = {
+   id: string;
+-  icon: LucideIcon;
++  /** Lucide 线性图标；也可以改用下面的 glassIcon / iconNode */
++  icon?: LucideIcon;
+   label: string;
+   iconColor: string;
+   glassIcon?: string;
++  /** 自定义图标节点。传了它优先，忽略 icon 与 glassIcon */
++  iconNode?: ReactNode;
+ };
+
+-{item.glassIcon ? <GlassIcon name={item.glassIcon} /> : <Icon size={22} />}
++{item.iconNode ? item.iconNode
++  : item.glassIcon ? <GlassIcon name={item.glassIcon} />
++  : Icon ? <Icon size={22} strokeWidth={1.75} />
++  : null}
+```
+
+**风险与结论**：
+- `icon` 从必填变可选 → 老调用方全部照常（TS 宽松了，不会报错）
+- 渲染优先级 `iconNode > glassIcon > icon`，**老的两个入口行为未变**
+- 唯一行为差异：`icon` 缺失且无 `glassIcon`/`iconNode` 时渲染 `null` 而非崩溃
+
+**排查提示**：如果**设置页 / 外观页**的卡片图标出现异常，
+第一嫌疑就是这个文件——它不在单页的样式隔离范围内（`.desktop-single` 前缀管不到它）。
+
+### K10. 修掉了组件名占位的旧 bug 【实证】
+
+```diff
+-{!preview && <span className="widget-label">widgets</span>}
++{!preview && widgetName ? <span className="widget-label">{widgetName}</span> : null}
+```
+
+原来无论什么组件，名字一律显示字面量 `"widgets"`（而上一行算出来的 `widgetName` 没人用）。
+现在显示真实名字，未知类型则不显示。
+
+**连带影响**：所有桌面组件的名字标签都变了（多页桌面也受影响，不只是单页）。
+若有人反馈"组件下面的文字变了/不见了"，这是**预期的修复**，不是新 bug。
