@@ -583,6 +583,29 @@ body {
 
 即：**调「状态栏位置」在 CSS 层面动不到目录页顶部。** 这一条不再是推断。
 
+**已补的一处（2026-10-17）**：上表里的 `--status-bar-height` **此前在整个仓库里没有任何定义**
+（`tokens.css` / `base.css` / `phone-shell.css` / `globals.css` / `theme-storage.ts` 都查过，
+`collectCssOverrides` 只搬 `cssOverrides` 里已存在的键，不生成新变量）。于是所有机型
+一律吃 `36px` 兜底——壳实测的真实高度虽然由 `MainActivity.injectStatusBarHeight()`
+注入成 `--android-shell-status-bar-height`，但**一个消费方都没有**。
+
+现在 `.ds-directory` 的 `padding-top` 直接读实测值：
+
+```css
+padding: calc(var(--android-shell-status-bar-height, var(--status-bar-height, 36px)) + 12px) …;
+```
+
+非壳环境（浏览器 / iOS PWA）没有 `--android-shell-status-bar-height`，回落到 36px，观感不变。
+
+**故意没有把 `--status-bar-height` 本身改成实测值**：它同时是 `.phone-status-bar`
+（虚拟状态栏）的高度，一并改会让那一条在窄状态栏机型上被压扁；虚拟状态栏的 36px
+是设计常量，不该跟设备走。如果以后确实要让虚拟状态栏也跟随设备，把那行的变量名换掉即可。
+
+**另外记一笔**：`floatshell-statusbarheight` 这个自定义事件目前**没有监听者**——
+本轮核对过的范围内（`desktop-shell.tsx` 1–2100 与 4040–5591、`phone-theme-app.tsx` 620–1150）
+一处都没有。壳侧照常派发且做了同值去重，属无害冗余；CSS 变量走行内样式继承，
+不依赖这个事件。真要给 JS 侧用，更稳的是直接调 `AndroidShell.getStatusBarHeightPx()`。
+
 **仍然待解释的**：那当时「12px 时标题在、4px 时不在」调的究竟是什么？
 三件独立的可能，需真机复测才能定：
 

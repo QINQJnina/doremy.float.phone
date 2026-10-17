@@ -226,7 +226,15 @@
   z-index: 700;
   display: flex;
   flex-direction: column;
-  padding: calc(var(--status-bar-height, 36px) + 12px) 14px 18px;
+  /* 顶部让位 = 设备**实测**的状态栏高度，不能写死。
+     壳是整屏 WebView 且隐藏了系统状态栏，目录页又是 inset:0 的整屏覆盖层，
+     内容必须让开刘海/状态栏那一整条真实高度，否则状态栏偏窄或偏高的机型会顶到边缘。
+     --android-shell-status-bar-height 由 MainActivity.injectStatusBarHeight() 注入
+     （写在 document.documentElement 的行内样式上，换算后已是 CSS px）；
+     浏览器 / iOS PWA 里没有这个变量，整条回落，行为与改动前一致（36px）。
+     ⚠️ 没有直接改 --status-bar-height 本身：它同时是 .phone-status-bar（虚拟状态栏）
+     的高度，跟着设备走会让那条在窄状态栏机型上被压扁。 */
+  padding: calc(var(--android-shell-status-bar-height, var(--status-bar-height, 36px)) + 12px) 14px 18px;
   /* 目录页是整屏覆盖层，本身不该滚动（滚动交给内部的 .ds-dir-scroll）。
      hidden 会让它变成「隐藏的可滚动容器」，点搜索框时浏览器把整页滚走、标题消失；
      clip 同样裁掉溢出，但不能被 focus scroll 滚动。
