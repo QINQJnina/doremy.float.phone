@@ -42,10 +42,12 @@ import androidx.health.connect.client.PermissionController
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsAnimationCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import java.io.File
 import java.io.FileOutputStream
+import kotlin.math.roundToInt
 
 /**
  * Float 小手机安卓壳：全屏 WebView 直接加载线上站点。
@@ -78,6 +80,21 @@ class MainActivity : AppCompatActivity() {
 
     /** 当前键盘（IME）高度（物理像素），0 = 键盘收起；用于给 WebView 让出底部空间。 */
     private var imeInsetPx: Int = 0
+
+    /**
+     * 正在跑的 IME 动画；null = 键盘没在动。
+     *
+     * 作用是一个「谁负责落值」的开关：动画期间由动画回调逐帧插值写内边距，
+     * 普通 insets 监听看到它非 null 就不写，免得两个来源在同一次动画里互相打架。
+     */
+    private var imeAnimation: WindowInsetsAnimationCompat? = null
+
+    /** 本次 IME 动画的起点 / 终点高度（物理像素），逐帧插值用。 */
+    private var imeAnimFromPx: Int = 0
+    private var imeAnimToPx: Int = 0
+
+    /** 最近一次真正下发到页面的状态栏高度（CSS px）；-1 = 还没发过。 */
+    private var injectedStatusBarCssPx: Int = -1
 
     /** 网页消息通知的自增 id：同一条消息覆盖同一 id 会让新通知顶掉旧的，故逐条递增。 */
     private var webNotifId = 500
@@ -275,6 +292,9 @@ class MainActivity : AppCompatActivity() {
         // 挂上 insets 监听：状态栏高度注入 + 键盘避让都靠它。必须在 setContentView 之后，
         // 此时 rootContainer 已初始化，监听回调里才能安全地给它设内边距。
         observeWindowInsets()
+        // 键盘动画回调要和 insets 监听一起就位：前者管动画途中的每一帧，
+        // 后者管静态终值（含低版本平台根本不派发动画的情况），两者互补、不重叠。
+        followImeAnimation()
         // 首帧主动请求一次 insets，确保启动即拿到状态栏高度（部分机型不会自动派发首次回调）。
         ViewCompat.requestApplyInsets(rootContainer)
 
@@ -466,18 +486,91 @@ class MainActivity : AppCompatActivity() {
             // 网页侧 interactiveWidget("resizes-content") 在 WebView 里同样不生效，
             // 于是输入框被键盘盖住。这里把 IME 高度写成容器底部内边距，WebView 变矮，
             // 网页 resize 后输入栏自然贴在键盘上方。
+            //
+            // 只在「没有动画在跑」时落终值：动画途中由 followImeAnimation() 的
+            // onProgress 逐帧插值，这里若也写一手，两边会在同一帧写不同高度。
+            // 需要它兜底的场景是：键盘高度直接跳变（无动画）、以及 API 30 以下
+            // 平台根本不派发 insets 动画的机型。
             val imePx = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
-            if (imePx != imeInsetPx) {
-                imeInsetPx = imePx
-                if (::rootContainer.isInitialized) rootContainer.setPadding(0, 0, 0, imePx)
-            }
+            if (imeAnimation == null) applyImePadding(imePx)
             insets
         }
+    }
+
+    /**
+     * 让键盘（IME）的让位量逐帧跟随系统动画。
+     *
+     * 之前只挂 OnApplyWindowInsetsListener 时，Android 11+ 要等动画收尾才派发终值，
+     * 输入栏是「后让位、一次跳到位」。WindowInsetsAnimationCompat.Callback 在动画的
+     * 每一帧回调 onProgress，并给出 0→1 的插值系数；按它插出中间高度写进容器底部
+     * 内边距，视觉上就是键盘「推着」内容往上走，没有跳变。
+     *
+     * 代价要承认：每帧改内边距都会触发一次 requestLayout，WebView 随之变矮，
+     * 网页每帧重新排版一次。这是「跟手」的必然开销，所以插值里做了取整幂等
+     * （见 applyImePadding），没有变化的帧不会白排一次。
+     *
+     * 只在 API 30+ 真正生效：低版本平台不派发 insets 动画，compat 层不会凭空造出
+     * 回调，那些机型仍由 observeWindowInsets() 一次落终值（与改动前行为一致）。
+     */
+    private fun followImeAnimation() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        ViewCompat.setWindowInsetsAnimationCallback(
+            window.decorView,
+            object : WindowInsetsAnimationCompat.Callback(DISPATCH_MODE_CONTINUE_ON_SUBTREE) {
+                override fun onPrepare(animation: WindowInsetsAnimationCompat) {
+                    if (animation.typeMask and WindowInsetsCompat.Type.ime() == 0) return
+                    imeAnimation = animation
+                    // 起点取容器「此刻真实的底部内边距」而不是缓存值：连续快开快关时，
+                    // 上一次动画可能停在中间，用缓存值会让这一帧先回弹再走。
+                    imeAnimFromPx =
+                        if (::rootContainer.isInitialized) rootContainer.paddingBottom else imeInsetPx
+                    imeAnimToPx = imeAnimFromPx
+                }
+
+                override fun onProgress(
+                    insets: WindowInsetsCompat,
+                    runningAnimations: MutableList<WindowInsetsAnimationCompat>,
+                ): WindowInsetsCompat {
+                    // 同一段动画里可能还有别的类型在跑（如导航栏），只认 IME 那条
+                    val animation = runningAnimations.firstOrNull {
+                        it.typeMask and WindowInsetsCompat.Type.ime() != 0
+                    } ?: return insets
+                    // onProgress 收到的 insets 对「正在动的类型」是终值，正好当插值终点
+                    val target = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
+                    imeAnimToPx = target
+                    val span = target - imeAnimFromPx
+                    applyImePadding(imeAnimFromPx + (span * animation.interpolatedFraction).roundToInt())
+                    return insets
+                }
+
+                override fun onEnd(animation: WindowInsetsAnimationCompat) {
+                    if (animation.typeMask and WindowInsetsCompat.Type.ime() == 0) return
+                    imeAnimation = null
+                    // 收尾对齐终值：最后一帧的插值可能因取整差 1px，留下一条缝
+                    applyImePadding(imeAnimToPx)
+                }
+            },
+        )
+    }
+
+    /**
+     * 写键盘让位内边距。幂等：同值直接返回，免得每帧白触发一次 requestLayout
+     * （逐帧插值里相邻两帧取整后经常是同一个值）。
+     */
+    private fun applyImePadding(px: Int) {
+        if (px == imeInsetPx) return
+        imeInsetPx = px
+        if (::rootContainer.isInitialized) rootContainer.setPadding(0, 0, 0, px)
     }
 
     /** 把实测状态栏高度（CSS px）写入页面根元素的 CSS 变量，供 phone-shell.css 的 --status-bar-drop 消费。 */
     private fun injectStatusBarHeight() {
         if (!::webView.isInitialized || statusBarHeightCssPx <= 0) return
+        // 同值不重发：键盘起落、旋转等场景下 insets 回调会比平时密集得多，同一高度
+        // 反复 setProperty + dispatchEvent 会白触发一遍样式重算（页面里还有监听者）。
+        // 调用方的 `cssPx != statusBarHeightCssPx` 是第一道闸，这里是最后一道。
+        if (statusBarHeightCssPx == injectedStatusBarCssPx) return
+        injectedStatusBarCssPx = statusBarHeightCssPx
         val js = "document.documentElement.style.setProperty('--android-shell-status-bar-height', '${statusBarHeightCssPx}px');" +
             "window.dispatchEvent(new CustomEvent('floatshell-statusbarheight', { detail: $statusBarHeightCssPx }));"
         webView.evaluateJavascript(js, null)
