@@ -159,6 +159,20 @@
   -webkit-backdrop-filter: blur(5px) saturate(140%);
 }
 
+/* 目录页内再进一步：直接关掉图标层的 backdrop 采样。
+   理由与上面那条 .ds-card 完全一致（见「目录里的卡片」注）：.ds-directory 的整页底色
+   已经是**完全不透明**的 var(--c-page-body-bg)，图标背后根本没有可糊的内容，
+   这层模糊纯属白耗——而目录里一屏有几十个图标盒，每个都是一个 backdrop root，
+   键盘 resize / 打开目录时全部要重新采样。
+   这条同时对应 K6（滚动掉帧）与 K1（键盘起落时可见性/重绘不稳）：两者同源，
+   实测单是去掉图标层采样就能让目录页稳定（docs K1「结论修正」8 组对照）。
+   ⚠️ 只下在目录页。桌面与 Dock 的图标背后是壁纸，关掉会明显失去玻璃观感，
+   是否要一并处理属于产品取舍，需先确认。 */
+.phone-shell[data-icon-effect="glass"] .ds-directory .icon-glyph-box:not(.icon-glyph-box-skin) {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
 /* ══ 桌面组件：按自身尺寸自然排布（2x2 占一列、2x4 占满一行……）══
    复用 .icon-grid 只是为了继承它的格子尺寸变量，布局本身改成流式换行。 */
 

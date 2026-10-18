@@ -492,7 +492,12 @@
     0 0 18px color-mix(in srgb, var(--c-desktop-icon-bg, #c7b8ff) 8%, transparent);
   isolation: isolate;
   transform: translateZ(0);
-  will-change: transform;
+  /* ⚠️ 这里原来还有一行 will-change: transform，已删除（见 docs K1 结论修正）。
+     will-change 不是「性能开关」而是对浏览器的保层承诺：一屏几十个图标盒长期挂着，
+     键盘 resize / 切页时全部要重新栅格化，反而制造可见重绘，K1 的可见性不稳也由此加剧。
+     规范明确不建议给大量元素长期使用。真需要动动画时让浏览器自行决定层即可。
+     ——若要再优化，下一步是去掉这一层的 backdrop-filter（K6/K1 同源），
+     但那会改变玻璃观感，需先确认产品取舍；目录页内已按先例关掉（见 desktop-single.css）。 */
 }
 
 .phone-shell[data-icon-effect="glass"] .icon-glyph-box::before {
