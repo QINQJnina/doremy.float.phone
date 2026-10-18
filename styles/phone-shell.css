@@ -536,10 +536,26 @@
   mask-composite: exclude;
 }
 
-.phone-shell[data-glass-pass="1"][data-icon-effect="glass"] .icon-glyph-box {
-  backdrop-filter: blur(22.01px) saturate(140%);
-  -webkit-backdrop-filter: blur(22.01px) saturate(140%);
-}
+/* ⚠️ 这里原本有一条「强制重栅格化」规则，已删除：
+
+     .phone-shell[data-glass-pass="1"][data-icon-effect="glass"] .icon-glyph-box {
+       backdrop-filter: blur(22.01px) saturate(140%);  ← 22px → 22.01px
+     }
+
+   22px 改成 22.01px 视觉上完全等同，唯一作用是让浏览器认为值变了、强制重绘这一层的
+   backdrop-filter。问题是它一次命中**全部图标盒**（桌面 / Dock / 文件夹面板），
+   而一屏有几十个 —— 激活瞬间这几十个 backdrop root 要同时重新采样，正是 K6（滚动掉帧）
+   与 K1（键盘起落时可见性/重绘不稳）的共同来源（见 docs K1「结论修正」）。
+
+   删除依据：实测 data-glass-pass 恒为 "0"（desktop-shell.tsx 第 4590 行
+   data-glass-pass={glassPaintPass % 2}，glassPaintPass 初值 0 且未定位到置位调用），
+   该规则从未匹配过任何元素，属休眠代码。保留它等于留一个随时可能被激活的
+   「全屏重栅格化」开关，与本文件同时进行的「减少无谓重栅格化」方向相反。
+
+   若将来出现「切换玻璃效果 / 换主题后图标模糊不刷新」的问题，原因很可能就是这个
+   强制重绘开关没了。恢复时**不要**再用改 blur 半径的做法，改成只对当前需要刷新的
+   少数元素操作，或改用 data-glass-busy（见 desktop-shell.tsx 的 suspendGlass，
+   那条是按时限自动摘除的临时挂起，作用面与生命周期都可控）。 */
 
 .phone-shell[data-icon-effect="transparent"] .icon-glyph-box {
   /** background-color: transparent !important; */

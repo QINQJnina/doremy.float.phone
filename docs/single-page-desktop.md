@@ -257,11 +257,32 @@ resize → 两个 hook 改 CSS 变量 → 重排/重绘，**而重绘结果不�
 → 涉及随机故障，**必须以重复次数（n/5）与 `getComputedStyle` 读数为准**，不凭单次肉眼。
 本节结论因此改用「稳定 / 不稳定」二分，不依赖症状命名。
 
-**第三号待嫌疑（未验证）**：`styles/phone-shell.css` 第 534–537 行的
-`.phone-shell[data-glass-pass="1"] .icon-glyph-box { backdrop-filter: blur(22.01px) … }`
-——「22px → 22.01px」是**强制重栅格化**的典型写法，若 `data-glass-pass` 常驻为 `"1"`，
-它可能独立于 `will-change` 持续触发重采样。查法：
-`document.querySelector('.phone-shell').dataset.glassPass`。
+**第三号嫌疑「强制重栅格化」已排除（真机读数）**：`styles/phone-shell.css` 曾有
+
+```css
+.phone-shell[data-glass-pass="1"][data-icon-effect="glass"] .icon-glyph-box {
+  backdrop-filter: blur(22.01px) saturate(140%);   /* 22px → 22.01px */
+}
+```
+
+「改一个无意义微小值」是强制重栅格化的典型写法，且一次命中**全部图标盒**，
+怀疑它独立于 `will-change` 持续触发重采样。
+
+**实测**：`document.querySelector('.phone-shell').dataset.glassPass` 输出为 `"0"`，
+不是 `"1"`。该属性来自 `desktop-shell.tsx` 第 4590 行 `data-glass-pass={glassPaintPass % 2}`，
+`glassPaintPass` 初值 0（第 1187 行）。**未定位到 `setGlassPaintPass` 的置位调用点**
+（仓库未配 PAT，工具只能按路径匹配、搜不了全文，这是本条的实证边界）。
+
+→ 结论：该规则在实测状态下**从未匹配过任何元素，属休眠代码**。已删除，原位留下
+说明注释与恢复指引（见 `phone-shell.css`，替换为注释的那一段）。删除依据与风险面：
+规则本身可逆，若日后出现「换主题/切玻璃效果后图标模糊不刷新」，第一嫌疑就是这个
+强制重绘开关被删了——但恢复时不要再用改 blur 半径的做法，改用 `data-glass-busy`
+那条（`desktop-shell.tsx` 的 `suspendGlass()`，按时限自动摘除，作用面与生命周期可控）。
+
+> ⚠️ 注意 `data-glass-busy` 与 `data-glass-pass` 是**两套独立机制**，别混：
+> - `data-glass-pass`（本次删除）：改 blur 半径强制重绘，全局命中，无自动回收；
+> - `data-glass-busy`（保留）：拖拽/增删组件时临时挂起模糊，360ms 后自动摘除
+>   （`desktop-shell.tsx` 第 3857–3866 行）。
 
 **实验 C+D 曾进过代码，已回滚（2026-10-17）**：一度把 `.ds-directory` 的
 `contain: paint` 删掉、并把入场动画的 `translateY(14px)` 改成纯 `opacity`，
