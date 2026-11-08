@@ -1018,3 +1018,112 @@ item.glassIcon ? <GlassIcon name={item.glassIcon} />
 
 **连带影响**：所有桌面组件的名字标签都变了（多页桌面也受影响，不只是单页）。
 若有人反馈"组件下面的文字变了/不见了"，这是**预期的修复**，不是新 bug。
+
+---
+
+## 十、K11. 同步上游时「冲突有多难」，取决于改动深度，不是文件数量 【实证分类 / 部分推断】
+
+**触发场景（2026-10-18）**：和上游同步时卡在 PR #6（`main → main`，跨 fork，50 个文件），
+`Resolve conflicts` 按钮灰色、点不了。当时的第一反应是「是不是我改的文件太多了」，
+于是想出一个看似干净的方案：**以后只新建文件、不改上游文件**。
+
+**这个方案是错的，而且抓错了维度。** 事后把本次 12 个改动文件按冲突性质重排，规律非常整齐：
+
+### 10.1 四级分类（本次实测）
+
+| 级别 | 文件 | 冲突可能性 |
+|---|---|---|
+| **纯新增** | `styles/desktop-single.css`（+518）、`docs/single-page-desktop.md`（+1020） | **永不冲突**——上游没有这两个文件，git 无事可做 |
+| **尾部追加** | `lib/desktop-layout-storage.ts`（+137）、`lib/widget-types.ts`（+30）、`app/globals.css`（+1） | 低；撞了也好解（两边各加一段，通常两段都留） |
+| **接缝** | `android-shell/app/build.gradle`（版本号 2 行）、`components/widgets/widget-renderer.tsx`（1 行）、`components/ui/card-grid.tsx`（几行） | 会撞，但冲突块只有几行，一眼能判 |
+| **深度改写** | `components/desktop-shell.tsx`、`components/phone-theme-app.tsx`、`styles/phone-shell.css`、`android-shell/.../MainActivity.kt` | **这才是卡住 PR 的真正原因** |
+
+**注意第一行**：518 行单页样式**本来就已经全部装在新文件里**，一行没污染 `phone-shell.css`。
+也就是说「新文件」这招早就用对了，问题不在它。
+
+### 10.2 真正的判断标准
+
+> **添加可以纯增量表达，删除和改写不行。**
+
+- 想**加**样式 / 组件 / 工具函数 → 放新文件，再接一根细线，搞定；
+- 想**删**掉上游某条规则、想**改**掉上游某行逻辑 → 只能动原文件，没有第二条路。
+
+具体到本 fork 那四处深度改写，可分性还不一样（这一栏是**推断**，未逐条实测）：
+
+| 改动 | 能否改成「新文件覆盖」 |
+|---|---|
+| `.phone-shell` / `.app-root` 的 `overflow: hidden → clip` | **能**。`globals.css` 里 `desktop-single.css` 在 `phone-shell.css` 之后 `@import`，同特异性后加载胜出 |
+| 图标盒删除 `will-change: transform` | **能**，覆盖成 `will-change: auto !important` 即可 |
+| 删除 `data-glass-pass` 那条强制重栅格化规则 | **不能**。想抵消一条死规则，只能在覆盖层把它的值原样写回去——比直接删更丑、更脆 |
+| `desktop-shell.tsx` / `phone-theme-app.tsx` 的挂载点 | **不能**。不写 import、不挂条件渲染，单页代码根本不会被执行 |
+
+→ 所以 `phone-shell.css` 与两个 TSX **不是「手滑改多了」，而是改写的必然代价**。
+
+### 10.3 该追的目标：薄接缝，不是零改动
+
+理想形态（**待做，不是现状**）：
+
+- 单页那 226 行渲染逻辑 + 三个 `render*` 函数 → 抽成 `components/desktop-single-view.tsx`；
+- `DesktopModePage`（230 行）从 `phone-theme-app.tsx` 抽出去；
+- 上游文件里只留：**一个 import + 一行条件渲染 + 若干 prop 传递**。
+
+收益：冲突从「500 行大块互撞」缩成「import 撞了、JSX 分支撞了」，而**两边都是新增的冲突，两段都留即可**。
+
+两个必须承认的限制：
+
+1. 接缝再薄也**不等于零**。挂载点一定在上游文件里，上游动那儿必撞——这是硬性下限。
+2. **过度隔离有反效果**。为了不碰上游文件去搞 monkey-patch、全局变量注入、DOM 打标记，
+   技术债远贵于冲突。本文件 K1 / K7 的教训本质都是「临时绕法后来变成新问题」。
+
+### 10.4 执行顺序：先保功能，再重构
+
+**别把两件难事叠在一次操作里。** 解冲突时同时重构 700 行，出错分不清是重构错还是合并错。
+
+1. 先让代码跑起来（该硬解就硬解，目标是能跑，不是漂亮）；
+2. 等 main 与上游拉平、环境稳定，再在 `dev-ui` 上单独做「抽组件、收薄接缝」；
+3. 下次同步才会收获收益：冲突面从 500 行变 5 行。
+
+### 10.5 跨 fork 的 PR 不给网页解冲突编辑器 【实证】
+
+PR #6 之所以 `Resolve conflicts` 是灰的，不是权限问题：**GitHub 只对同一仓库内的 PR**
+提供网页冲突编辑器；跨 fork（`upstream:main ← fork:main`）一律不给。
+
+推论：以后把个人分支推到自己仓库里跑（`main → dev-ui` 这类同仓库 PR），
+按钮会是亮的，大部分冲突能直接在网页上点掉，不用本地环境。
+
+另外两个名字骗人的东西：
+
+- **`Enable auto-merge`** ≠ 自动解冲突——它只是「CI 过了自动按合并键」，前提是**本来就没冲突**；
+- **`Resolve conflicts`** 不是运行什么解决程序，它是一个手工编辑冲突块的网页编辑器。
+
+GitHub 从来没有「自动解决冲突」的能力。所谓自动合并，只是 git 判断两边改的位置**不重叠**；
+一旦重叠就必须有人做语义判断。
+
+### 10.6 标准同步流程（main 当镜像 + 个人改动放分支）
+
+**结构**：`main` 只做上游镜像，一个自己的提交都不要有；个人改动全在 `dev-ui` / `feature/*`。
+
+```bash
+# ① main 同步上游（纯镜像时只会是快进，永远零冲突）
+git checkout main
+git fetch upstream
+git merge --ff-only upstream/main
+git push origin main
+
+# ② 个人分支主动合 main（冲突在这里解，解完 merge base 前移，下次只剩增量）
+git checkout dev-ui
+git merge origin/main
+
+# ③ 部署分支指向 dev-ui，而不是 main
+```
+
+**两条必须守住的条件**：
+
+1. **main 上不能再有任何直接提交。** 直推一次，`Sync fork` 就会重新出现
+   「Discard commits / 手工解决」那个岔路口（本次踩的就是这个坑）。
+2. **个人分支要定期主动合 main，别攒。** 攒得越久，merge base 落后越多，
+   一次要处理的冲突块越多。
+
+**可选**：本地开 `git config --global rerere.enabled true`，
+让 git 记住你解决过的同一处冲突并在下次自动重放。只对**完全相同**的冲突片段有效，
+且只是本地配置（GitHub 网页合并不会用它）。
