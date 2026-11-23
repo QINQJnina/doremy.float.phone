@@ -204,178 +204,10 @@ function humanizeSegment(segment: string): string {
   return segment;
 }
 
-// ── 内嵌：lib/llm-prompt-assembler 的输出正则（placement = 2）──
-// 聊天正文的落地路径是 stripHallucinatedTimestamps → applyOutputRegex → parseAndSaveResponse，
-// 而推送预览过去只对裸输出做纯文本处理：用户的输出正则（删旁白、改格式、去标签等）
-// 在通知里完全不生效，同一段原始输出在聊天与通知里就长得不一样。这里按同一语义
-// 复刻 runRegexRule / applyRegex(placement=2)，让预览先过一遍同一批规则。
-//
-// 宏引擎只复刻输出正则这一路真正会用到的宏：客户端应用输出正则时仅构造
-// new MacroEngine(characterName, userName)，其余字段全空，两侧行为一致；
-// 未知宏原样保留（返回带花括号的原串），与客户端相同。
-const PREVIEW_TRIM = "\x00TRIM\x00";
-
-function previewFormatTimestamp(format: string): string {
-  const now = new Date();
-  const pad = (n: number, len = 2) => String(n).padStart(len, "0");
-  return format
-    .replace(/YYYY/g, String(now.getFullYear()))
-    .replace(/YY/g, String(now.getFullYear()).slice(-2))
-    .replace(/MM/g, pad(now.getMonth() + 1))
-    .replace(/DD/g, pad(now.getDate()))
-    .replace(/HH/g, pad(now.getHours()))
-    .replace(/hh/g, pad(now.getHours() % 12 || 12))
-    .replace(/mm/g, pad(now.getMinutes()))
-    .replace(/ss/g, pad(now.getSeconds()))
-    .replace(/A/g, now.getHours() >= 12 ? "PM" : "AM")
-    .replace(/a/g, now.getHours() >= 12 ? "pm" : "am");
-}
-
-function previewMacroValue(body: string, charName: string, userName: string, vars: Record<string, string>): string {
-  if (body.startsWith("//")) return "";
-  if (body === "trim") return PREVIEW_TRIM;
-  if (body === "char") return charName;
-  if (body === "user") return userName;
-  if (body === "time") {
-    const now = new Date();
-    return `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-  }
-  if (body === "weekday") return ["星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"][new Date().getDay()];
-  if (body === "uuid") return crypto.randomUUID();
-  if (body === "timestamp") return new Date().toISOString();
-  if (body.startsWith("timestamp:")) return previewFormatTimestamp(body.substring(10).trim());
-  if (body.startsWith("setvar::")) {
-    const parts = body.substring(8).split("::");
-    if (parts.length >= 2) vars[parts[0]] = parts.slice(1).join("::");
-    return "";
-  }
-  if (body.startsWith("getvar::")) return vars[body.substring(8)] ?? "";
-  if (body.startsWith("random::")) {
-    const items = body.substring(8).split("::").filter(Boolean);
-    return items.length > 0 ? items[Math.floor(Math.random() * items.length)] : "";
-  }
-  if (body.startsWith("random:")) {
-    const items = body.substring(7).split(/[,\n]/).map(s => s.trim()).filter(Boolean);
-    return items.length > 0 ? items[Math.floor(Math.random() * items.length)] : "";
-  }
-  return `{{${body}}}`;
-}
-
-function expandPreviewMacros(text: string, charName: string, userName: string, vars: Record<string, string>): string {
-  let result = text;
-  for (let i = 0; i < 50; i += 1) {
-    const next = result.replace(/\{\{([^{}]*?)\}\}/gs, (_m, body: string) => previewMacroValue(body, charName, userName, vars));
-    if (next === result) break;
-    result = next;
-  }
-  return result.replace(/\n*\x00TRIM\x00\n*/g, "");
-}
-
-function previewRegexFromString(input: string): RegExp | null {
-  try {
-    const m = input.match(/(\/?)(.+)\1([a-z]*)/i);
-    if (m) {
-      if (m[3] && !/^(?!.*?(.).*?\1)[dgimsuyv]+$/.test(m[3])) return new RegExp(input);
-      return new RegExp(m[2], m[3]);
-    }
-  } catch { /* 解析失败按无规则处理 */ }
-  return null;
-}
-
-function previewSanitizeRegexMacro(x: string): string {
-  if (!x || typeof x !== "string") return x;
-  return x.replace(/[\n\r\t\v\f\0.^$*+?{}[\]\\/|()]/g, (s) => {
-    switch (s) {
-      case "\n": return "\\n";
-      case "\r": return "\\r";
-      case "\t": return "\\t";
-      case "\v": return "\\v";
-      case "\f": return "\\f";
-      case "\0": return "\\0";
-      default: return "\\" + s;
-    }
-  });
-}
-
-function previewRunRegexRule(rule: Record<string, unknown>, text: string, charName: string, userName: string, vars: Record<string, string>): string {
-  const findRegexRaw = typeof rule.findRegex === "string" ? rule.findRegex : "";
-  if (!findRegexRaw || !text) return text;
-  let regexString = findRegexRaw;
-  if (rule.substituteRegex) {
-    if (rule.substituteRegex === 2) {
-      regexString = findRegexRaw.replace(/\{\{([^{}]*?)\}\}/gs, (_m, body: string) => {
-        const wrapped = `{{${body}}}`;
-        const resolved = expandPreviewMacros(wrapped, charName, userName, vars);
-        if (resolved === wrapped) return resolved;
-        return previewSanitizeRegexMacro(resolved);
-      });
-    } else {
-      regexString = expandPreviewMacros(regexString, charName, userName, vars);
-    }
-  }
-  const findRegex = previewRegexFromString(regexString);
-  if (!findRegex) return text;
-  if (findRegex.global || findRegex.sticky) findRegex.lastIndex = 0;
-  const trimStrings = Array.isArray(rule.trimStrings) ? rule.trimStrings as string[] : [];
-  const replaceString = typeof rule.replaceString === "string" ? rule.replaceString : "";
-  return text.replace(findRegex, function (...args: unknown[]) {
-    const replaceStr = replaceString.replace(/\{\{match\}\}/gi, "$0");
-    const replaced = replaceStr.replace(/\$(\d+)|\$<([^>]+)>/g, (_s, num?: string, groupName?: string) => {
-      let match: string | undefined;
-      if (num !== undefined) match = args[Number(num)] as string | undefined;
-      else if (groupName) {
-        const groups = args[args.length - 1] as Record<string, string> | undefined;
-        match = groups && typeof groups === "object" ? groups[groupName] : undefined;
-      }
-      if (!match) return "";
-      let value = String(match);
-      for (const ts of trimStrings) value = value.replaceAll(expandPreviewMacros(ts, charName, userName, vars), "");
-      return value;
-    });
-    return expandPreviewMacros(replaced, charName, userName, vars);
-  });
-}
-
-/** 复刻 getActiveAppTags：merge 里没有 appTags 时按 appId + followup 推导。 */
-function previewActiveTags(merge: Record<string, unknown> | null | undefined): string[] {
-  const tags = merge && Array.isArray(merge.appTags) ? merge.appTags as unknown[] : null;
-  if (tags) return tags.map(String);
-  const appId = merge && typeof merge.appId === "string" && merge.appId ? merge.appId : "chat";
-  const followUpCount = merge && typeof merge.followUpCount === "number" ? merge.followUpCount : 0;
-  return [appId, ...(followUpCount > 0 ? ["followup"] : [])];
-}
-
-/** 对预览文本应用输出正则（placement=2，过滤条件与聊天侧 applyOutputRegex 一致）。 */
-function applyOutputRegexToPreview(rawText: string, merge: Record<string, unknown> | null | undefined): string {
-  const groups = merge && Array.isArray(merge.regexes) ? merge.regexes as Record<string, unknown>[] : [];
-  if (groups.length === 0) return rawText;
-  const charName = merge && typeof merge.characterName === "string" ? merge.characterName : "";
-  const userName = merge && typeof merge.userName === "string" ? merge.userName : "用户";
-  const activeTags = previewActiveTags(merge);
-  const vars: Record<string, string> = {};
-  let result = rawText;
-  for (const group of groups) {
-    const rules = group && Array.isArray(group.rules) ? group.rules as Record<string, unknown>[] : [];
-    for (const rule of rules) {
-      if (!rule || rule.disabled === true) continue;
-      if (!Array.isArray(rule.placement) || !(rule.placement as number[]).includes(2)) continue;
-      if (rule.markdownOnly === true || rule.promptOnly === true) continue;
-      if (rule.historyOnly === true) continue;
-      const required = Array.isArray(rule.tags) ? rule.tags as string[] : [];
-      if (required.length > 0 && !required.every(t => activeTags.includes(t))) continue;
-      try {
-        result = previewRunRegexRule(rule, result, charName, userName, vars);
-      } catch { /* 与客户端一致：坏规则静默跳过 */ }
-    }
-  }
-  return result;
-}
-
 function splitResponseForPushPreview(rawText: string): string[] {
   let text = stripStateValues(rawText);
   text = stripBracketBlock(text, "状态栏");
-  text = stripBracketBlock(text, "内心");
-  text = text.replace(/\n{3,}/g, "\n\n").trim();
+  text = stripBracketBlock(text, "内心");  text = text.replace(/\n{3,}/g, "\n\n").trim();
   return text
     .split(/\n\n+/)
     .map(segment => humanizeSegment(segment.trim()))
@@ -383,7 +215,60 @@ function splitResponseForPushPreview(rawText: string): string[] {
     .filter(Boolean);
 }
 
+/**
+ * 生活现场输出走 JSON 协议（兼容旧 XML/纯文本）。
+ * 通知和快捷回复都只认解析后的 action/dialogue，避免把原始 JSON 推给用户。
+ */
+function parseLifeSceneOutput(rawText: string): { action: string; dialogues: string[] } {
+  const text = String(rawText ?? "").replace(/```(?:json)?/gi, "").trim();
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    try {
+      const value = JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>;
+      const action = typeof value.action === "string" ? value.action.trim() : "";
+      const rawDialogue = value.dialogue;
+      const dialogues = (Array.isArray(rawDialogue) ? rawDialogue : typeof rawDialogue === "string" ? [rawDialogue] : [])
+        .map(item => String(item ?? "").trim())
+        .filter(Boolean);
+      return { action, dialogues };
+    } catch { /* fall through to legacy formats */ }
+  }
+  const action = text.match(/<life_action\b[^>]*>([\s\S]*?)<\/life_action\s*>/i)?.[1]?.trim() ?? "";
+  const dialogue = text.match(/<life_dialogue\b[^>]*>([\s\S]*?)<\/life_dialogue\s*>/i)?.[1]?.trim() ?? "";
+  const fallback = text.replace(/<[^>]+>/g, "").trim();
+  return { action, dialogues: dialogue ? [dialogue] : fallback ? [fallback] : [] };
+}
+
 // ── 内嵌：lib/server/push-job-crypto 的解密（Web Crypto 实现，格式兼容） ──
+function appendLifeScheduleContext(body: Record<string, unknown>, providerKind: ProviderKind, context: string): void {
+  const appendToMessage = (message: Record<string, unknown>) => {
+    const content = message.content;
+    if (typeof content === "string") {
+      message.content = content + "\n\n" + context;
+    } else if (Array.isArray(content)) {
+      content.push(providerKind === "gemini" ? { text: context } : { type: "text", text: context });
+    }
+  };
+  const messages = Array.isArray(body.messages) ? body.messages as Record<string, unknown>[] : null;
+  if (messages) {
+    const target = [...messages].reverse().find(message => message.role === "user");
+    if (target) appendToMessage(target);
+    return;
+  }
+  const contents = Array.isArray(body.contents) ? body.contents as Record<string, unknown>[] : null;
+  if (contents) {
+    const target = [...contents].reverse().find(message => message.role === "user");
+    if (target && Array.isArray(target.parts)) {
+      (target.parts as unknown[]).push({ text: context });
+    }
+  }
+}
+
+function isLifeSleepActivity(value: string): boolean {
+  return /睡眠|睡觉|入睡|午休/.test(value);
+}
+
 type EncryptedPayload = { v: 1; iv: string; tag: string; ct: string };
 
 function base64ToBytes(value: string): Uint8Array {
@@ -654,10 +539,34 @@ Deno.serve(async (req: Request) => {
   const job = claimed[0];
   if (!job) return new Response("already claimed", { status: 200 });
 
-  const finish = (status: "done" | "failed", note: string) => rest(`push_jobs?id=eq.${encodeURIComponent(job.id)}`, {
+  let isLifeSceneJob = false;
+  const finish = async (status: "done" | "failed", note: string) => {
+    await rest(`push_jobs?id=eq.${encodeURIComponent(job.id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status, result_note: note.slice(0, 300), updated_at: new Date().toISOString() }),
+    }).catch(() => undefined);
+    if (isLifeSceneJob) {
+      await rest("life_schedule_diagnostic_events", {
+        method: "POST", headers: { Prefer: "return=minimal" },
+        body: JSON.stringify([{
+          id: `life-trace-${crypto.randomUUID()}`, trace_id: job.id, user_id: job.user_id,
+          stage: "任务最终结果", severity: status === "failed" ? "error" : "info",
+          code: status === "failed" ? "life_job_final_failed" : "life_job_final_done",
+          detail: note.slice(0, 500), job_id: job.id,
+        }]),
+      }).catch(() => undefined);
+    }
+  };
+
+  const deferUntil = (executeAtMs: number, note: string) => rest(`push_jobs?id=eq.${encodeURIComponent(job.id)}`, {
     method: "PATCH",
-    body: JSON.stringify({ status, result_note: note.slice(0, 300), updated_at: new Date().toISOString() }),
-  }).catch(() => undefined);
+    body: JSON.stringify({
+      status: "pending",
+      execute_at: new Date(executeAtMs).toISOString(),
+      result_note: note.slice(0, 300),
+      updated_at: new Date().toISOString(),
+    }),
+  }).catch(() => null);
 
   /**
    * 这一单是否已被客户端撤销。
@@ -668,12 +577,16 @@ Deno.serve(async (req: Request) => {
    * 用户看到的就是「根本没关上」。
    * 查不到（网络抖动等）按「未被撤销」处理，宁可多发一次也不误杀正常消息。
    */
+  let isLifeSceneJob = false;
   const isCancelled = async (): Promise<boolean> => {
     const response = await rest(
       `push_jobs?id=eq.${encodeURIComponent(job.id)}&select=status&limit=1`,
     ).catch(() => null);
     if (!response || !response.ok) return false;
     const rows = await response.json().catch(() => []) as { status?: string }[];
+    // A deleted life-scene row means the scene/participant was removed. Do not let
+    // an already-running model call send a stale action after the user cancelled it.
+    if (!rows.length) return isLifeSceneJob;
     return rows[0]?.status === "cancelled";
   };
 
@@ -692,6 +605,315 @@ Deno.serve(async (req: Request) => {
       return;
     }
     const payload = JSON.parse(await decryptPayload(job.payload, payloadKey)) as JobPayload;
+    isLifeSceneJob = Boolean(payload.merge?.lifeScene);
+    // 生活主动消息必须通过最新可用快照验证；缺失、损坏或位置不一致一律 fail closed。
+    const lifeSceneMeta = payload.merge?.lifeScene as { sceneId?: string; characterId?: string; traceId?: string } | undefined;
+    let lifeScheduleVersionAtStart: string | null = null;
+    let lifeRuntimeStateVersionAtStart: number | null = null;
+    let lifePlayerLocationAtStart: string | null = null;
+    let lifeCharacterLocationAtStart: string | null = null;
+    let lifePlayerActivityAtStart = "";
+    let lifeCharacterActivityAtStart = "";
+    const writeLifeDiagnostic = async (code: string, detail: string, repairHint: string) => {
+      const diagnosticId = code === "life_schedule_snapshot_stale" || code === "life_schedule_runtime_unavailable" || code === "life_schedule_runtime_changed_during_generation" || code === "life_schedule_snapshot_missing"
+        ? `life-scheduler:${job.user_id}:stale`
+        : `life-scheduler:${job.user_id}:${code}`;
+      const existingResponse = await rest(`life_schedule_diagnostics?id=eq.${encodeURIComponent(diagnosticId)}&select=id,resolved_at&limit=1`);
+      const existingRows = existingResponse.ok ? await existingResponse.json() as Array<{ resolved_at?: string | null }> : [];
+      const shouldNotify = !existingRows[0] || Boolean(existingRows[0].resolved_at);
+      await rest("life_schedule_diagnostics?on_conflict=id", {
+        method: "POST", headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+        body: JSON.stringify([{
+          id: diagnosticId, user_id: job.user_id, severity: "error", code,
+          detail: detail.slice(0, 500), repair_hint: repairHint.slice(0, 500),
+          updated_at: new Date().toISOString(), resolved_at: null,
+        }]),
+      });
+      await rest("life_schedule_diagnostic_events", {
+        method: "POST", headers: { Prefer: "return=minimal" },
+        body: JSON.stringify([{
+          id: `life-trace-${crypto.randomUUID()}`, trace_id: lifeSceneMeta?.traceId || job.id,
+          user_id: job.user_id, stage: "业务链路异常", severity: "error", code,
+          detail: detail.slice(0, 500), actor_id: lifeSceneMeta?.characterId || null,
+          session_id: typeof payload.merge?.sessionId === "string" ? payload.merge.sessionId : null,
+          job_id: job.id,
+        }]),
+      }).catch(() => undefined);
+      if (!shouldNotify) return;
+      const subscriptionsResponse = await rest(`push_subscriptions?user_id=eq.${encodeURIComponent(job.user_id)}&select=endpoint,p256dh,auth&limit=50`);
+      const subscriptions = subscriptionsResponse.ok
+        ? await subscriptionsResponse.json() as SubscriptionRow[]
+        : [];
+      const topics = subscriptions.filter(item => item.endpoint.startsWith("shell:"))
+        .map(item => item.endpoint.slice("shell:".length).trim()).filter(Boolean)
+        .map(owner => `shellpush:${owner}`);
+      const notificationBody = (code + "：" + detail + "；修复：" + repairHint).slice(0, 180);
+      if (topics.length) {
+        await fetch(`${supabaseUrl}/realtime/v1/api/broadcast`, {
+          method: "POST", headers: restHeaders,
+          body: JSON.stringify({ messages: topics.map(topic => ({
+            topic, event: "notify",
+            payload: { title: "生活系统 · 云端诊断", body: notificationBody, url: "/life", kind: "life_diagnostic" },
+          })) }),
+        }).catch(() => undefined);
+      }
+      const webSubscriptions = subscriptions.filter(item => !item.endpoint.startsWith("shell:"));
+      if (webSubscriptions.length) {
+        const configResponse = await rest("push_server_config?id=eq.main&select=vapid_public_key,vapid_private_key,site_origin&limit=1");
+        const configRows = configResponse.ok ? await configResponse.json() as Array<{
+          vapid_public_key?: string; vapid_private_key?: string; site_origin?: string;
+        }> : [];
+        const config = configRows[0];
+        if (config?.vapid_public_key && config.vapid_private_key) {
+          for (const subscription of webSubscriptions) {
+            try {
+              const status = await sendWebPushRaw(subscription, JSON.stringify({
+                title: "生活系统 · 云端诊断", body: notificationBody, url: "/life", kind: "life_diagnostic",
+              }), {
+                publicKey: config.vapid_public_key,
+                privateKey: config.vapid_private_key,
+                subject: config.site_origin || "mailto:admin@localhost",
+              });
+              if (status === 404 || status === 410) {
+                await rest(`push_subscriptions?endpoint=eq.${encodeURIComponent(subscription.endpoint)}`, { method: "DELETE" });
+              }
+            } catch { /* cloud diagnostic remains visible in the app */ }
+          }
+        }
+      }
+    };
+    const writeLifeTraceEvent = async (
+      stage: string, code: string, detail: string, severity: "info" | "warning" | "error" = "info",
+    ) => {
+      if (!isLifeSceneJob) return;
+      await rest("life_schedule_diagnostic_events", {
+        method: "POST", headers: { Prefer: "return=minimal" },
+        body: JSON.stringify([{
+          id: `life-trace-${crypto.randomUUID()}`,
+          trace_id: lifeSceneMeta?.traceId || job.id,
+          user_id: job.user_id, stage, severity, code, detail: detail.slice(0, 500),
+          actor_id: lifeSceneMeta?.characterId || null,
+          session_id: typeof payload.merge?.sessionId === "string" ? payload.merge.sessionId : null,
+          job_id: job.id,
+        }]),
+      }).catch(() => undefined);
+    };
+    await writeLifeTraceEvent("生成任务启动", "life_generation_started", "云端生成器已领取生活任务，开始验证最新快照和角色运行态。");
+
+    if (payload.merge?.lifeScene) {
+      if (!lifeSceneMeta?.sceneId || !lifeSceneMeta.characterId) {
+        await finish("done", "life schedule: incomplete scene metadata; rejected safely");
+        return;
+      }
+      const snapResponse = await rest(
+        `push_bridge_snapshots?user_id=eq.${encodeURIComponent(job.user_id)}`
+        + `&rule_id=eq.life-schedule&select=payload,updated_at&limit=1`,
+      );
+      if (!snapResponse.ok) {
+        await finish("done", "life schedule: snapshot lookup failed; rejected safely");
+        return;
+      }
+      const snapRows = await snapResponse.json() as { payload?: EncryptedPayload; updated_at?: string }[];
+      if (!snapRows[0]?.payload) {
+        await finish("done", "life schedule: snapshot missing; rejected safely");
+        return;
+      }
+      try {
+        const snapshot = JSON.parse(await decryptPayload(snapRows[0].payload, payloadKey)) as {
+          updatedAt?: string;
+          scheduleVersion?: string;
+          enabled?: boolean;
+          autonomyEnabled?: boolean;
+          proactiveEnabled?: boolean;
+          playerLocationId?: string;
+          foregroundSceneId?: string;
+          foregroundLeaseUntil?: string;
+          scenes?: { id?: string; locationId?: string; characterIds?: string[] }[];
+          characterLocations?: Record<string, string>;
+          scheduleSlots?: { ownerType?: string; ownerId?: string; startAt?: string; endAt?: string; title?: string; kind?: string; source?: string; plannedLocationName?: string }[];
+          actorStates?: { ownerType?: string; ownerId?: string; activity?: string; currentLocationName?: string }[];
+          onlineChatCharacterId?: string;
+          onlineChatSessionId?: string;
+          onlineChatLeaseUntil?: string;
+        };
+        const now = Date.now();
+        lifeScheduleVersionAtStart = snapshot.scheduleVersion || null;
+        const snapshotAt = Date.parse(snapRows[0].updated_at || snapshot.updatedAt || "");
+        if (!Number.isFinite(snapshotAt) || now - snapshotAt > 3 * 60_000) {
+          await writeLifeDiagnostic(
+            "life_schedule_snapshot_stale",
+            "云端日程快照超过 3 分钟未更新，已暂停主动生成，避免角色依据过期地点行动。",
+            "检查 Supabase life-scheduler Cron 是否启用、life_schedule_runtime 表是否可读；恢复后任务会自动续跑。",
+          ).catch(() => undefined);
+          const deferAt = now + 60_000;
+          const deferred = await deferUntil(deferAt, "life schedule: cloud schedule state is stale; waiting for the next server evaluation");
+          if (!deferred?.ok) await finish("done", "life schedule: stale cloud state; defer failed safely");
+          return;
+        }
+        // Read the per-character authoritative runtime row immediately before generation.
+        // Only apply it when it was computed from the same schedule version as the snapshot.
+        const runtimeResponse = await rest(
+          `life_schedule_runtime?user_id=eq.${encodeURIComponent(job.user_id)}`
+          + `&scene_id=eq.${encodeURIComponent(lifeSceneMeta.sceneId)}`
+          + `&character_id=eq.${encodeURIComponent(lifeSceneMeta.characterId)}`
+          + "&select=schedule_version,state_version,activity,location_id,location_name,player_activity,player_location_id,player_location_name,updated_at&limit=1",
+        ).catch(() => null);
+        const runtimeRows = runtimeResponse?.ok
+          ? await runtimeResponse.json().catch(() => []) as Array<{
+            schedule_version?: string; state_version?: number; activity?: string; location_id?: string;
+            location_name?: string; player_activity?: string; player_location_id?: string;
+            player_location_name?: string; updated_at?: string;
+          }>
+          : [];
+        const runtime = runtimeRows[0];
+        const runtimeAt = Date.parse(runtime?.updated_at || "");
+        const runtimeReady = Boolean(runtime
+          && runtime.schedule_version === snapshot.scheduleVersion
+          && Number.isFinite(Number(runtime.state_version))
+          && Number.isFinite(runtimeAt) && now - runtimeAt <= 2 * 60_000
+          && runtime.location_id && runtime.player_location_id);
+        if (!runtimeReady || !runtime) {
+          await writeLifeDiagnostic(
+            "life_schedule_runtime_unavailable",
+            "角色最新云端运行态不存在、版本不匹配或超过 2 分钟未更新，已阻止使用旧快照生成主动消息。",
+            "等待 life-scheduler 下一分钟完成运行态计算；若持续发生，检查 life_schedule_runtime 表、Cron 和 life-scheduler 日志。",
+          ).catch(() => undefined);
+          const deferred = await deferUntil(now + 60_000, "life schedule: authoritative runtime unavailable; waiting for cloud evaluation");
+          if (!deferred?.ok) await finish("done", "life schedule: runtime unavailable; defer failed safely");
+          return;
+        }
+        lifeRuntimeStateVersionAtStart = Number(runtime.state_version);
+        await writeLifeTraceEvent("运行态校验通过", "life_runtime_validated", "角色运行态版本、日程版本、更新时间和当前位置均通过校验。");
+        snapshot.playerLocationId = runtime.player_location_id || snapshot.playerLocationId;
+        snapshot.characterLocations = {
+          ...(snapshot.characterLocations || {}),
+          [lifeSceneMeta.characterId]: runtime.location_id || "",
+        };
+        snapshot.actorStates = (snapshot.actorStates || []).map(item => {
+          if (item.ownerType === "player" && item.ownerId === "player") {
+            return { ...item, activity: runtime.player_activity || item.activity, currentLocationName: runtime.player_location_name || item.currentLocationName };
+          }
+          if (item.ownerType === "character" && item.ownerId === lifeSceneMeta.characterId) {
+            return { ...item, activity: runtime.activity || item.activity, currentLocationName: runtime.location_name || item.currentLocationName };
+          }
+          return item;
+        });
+        if (snapshot.enabled === false || snapshot.autonomyEnabled === false || snapshot.proactiveEnabled === false) {
+          await finish("done", "life schedule: autonomous life actions disabled by latest cloud settings");
+          return;
+        }
+        await rest(`life_schedule_diagnostics?id=eq.${encodeURIComponent("life-scheduler:" + job.user_id + ":stale")}`, {
+          method: "PATCH",
+          body: JSON.stringify({ resolved_at: new Date().toISOString(), updated_at: new Date().toISOString() }),
+        }).catch(() => undefined);
+        lifePlayerLocationAtStart = snapshot.playerLocationId || null;
+        lifeCharacterLocationAtStart = snapshot.characterLocations?.[lifeSceneMeta.characterId] || null;
+        lifePlayerActivityAtStart = snapshot.actorStates?.find(item => item.ownerType === "player" && item.ownerId === "player")?.activity || "";
+        lifeCharacterActivityAtStart = snapshot.actorStates?.find(item => item.ownerType === "character" && item.ownerId === lifeSceneMeta.characterId)?.activity || "";
+        const scene = (snapshot.scenes ?? []).find(item => item.id === lifeSceneMeta.sceneId);
+        const characterLocation = snapshot.characterLocations?.[lifeSceneMeta.characterId];
+        const hasPlayerLocation = typeof snapshot.playerLocationId === "string" && snapshot.playerLocationId.length > 0;
+        const hasCharacterLocation = typeof characterLocation === "string" && characterLocation.length > 0;
+        const isParticipant = scene?.characterIds?.includes(lifeSceneMeta.characterId) === true;
+        const sameScene = Boolean(scene && hasPlayerLocation && hasCharacterLocation && isParticipant)
+          && scene?.locationId === snapshot.playerLocationId
+          && characterLocation === snapshot.playerLocationId;
+        if (!sameScene) {
+          await finish("done", "life schedule: player/character no longer share the exact scene location");
+          return;
+        }
+        const slots = snapshot.scheduleSlots ?? [];
+        const actors = snapshot.actorStates ?? [];
+        const activeSlot = (ownerType: string, ownerId: string) => slots.find(slot => {
+          if (slot.ownerType !== ownerType || slot.ownerId !== ownerId) return false;
+          const start = Date.parse(slot.startAt || "");
+          const end = Date.parse(slot.endAt || "");
+          return Number.isFinite(start) && Number.isFinite(end) && start <= now && now < end;
+        });
+        const actorIsSleeping = (ownerType: string, ownerId: string): boolean => {
+          const slot = activeSlot(ownerType, ownerId);
+          const actor = actors.find(item => item.ownerType === ownerType && item.ownerId === ownerId);
+          return isLifeSleepActivity(slot?.title || actor?.activity || "");
+        };
+        const nextAwakeAt = (ownerType: string, ownerId: string): number => {
+          const future = slots
+            .filter(slot => slot.ownerType === ownerType && slot.ownerId === ownerId
+              && Number.isFinite(Date.parse(slot.startAt || ""))
+              && Date.parse(slot.startAt || "") > now
+              && !isLifeSleepActivity(slot.title || ""))
+            .map(slot => Date.parse(slot.startAt || ""));
+          const weekMs = 7 * 24 * 60 * 60_000;
+          for (const slot of slots.filter(item => item.ownerType === ownerType && item.ownerId === ownerId
+            && item.source === "weekly-generation" && !["special", "appointment"].includes(item.kind || "")
+            && !isLifeSleepActivity(item.title || ""))) {
+            const start = Date.parse(slot.startAt || ""), end = Date.parse(slot.endAt || "");
+            if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
+            const offset = Math.max(0, Math.floor((now - start) / weekMs));
+            for (let week = offset; week <= offset + 2; week += 1) {
+              const projected = start + week * weekMs;
+              if (projected > now) future.push(projected);
+            }
+          }
+          return future.length ? Math.min(...future) : now + 30 * 60_000;
+        };
+        const playerSleeping = actorIsSleeping("player", "player");
+        const characterSleeping = actorIsSleeping("character", lifeSceneMeta.characterId);
+        if (playerSleeping || characterSleeping) {
+          // Keep the same durable job pending until both participants' next awake slot.
+          // Do not spend a repeat turn or send a notification during sleep.
+          const wakeTimes = [
+            ...(playerSleeping ? [nextAwakeAt("player", "player")] : []),
+            ...(characterSleeping ? [nextAwakeAt("character", lifeSceneMeta.characterId)] : []),
+          ];
+          const deferAt = Math.max(now + 60_000, ...wakeTimes);
+          const deferred = await deferUntil(deferAt, "life schedule: sleep window; deferred until " + new Date(deferAt).toISOString());
+          if (!deferred?.ok) await finish("done", "life schedule: sleep window; defer failed safely");
+          return;
+        }
+        const onlineChatLeaseUntil = Date.parse(snapshot.onlineChatLeaseUntil || "");
+        if (snapshot.onlineChatCharacterId === lifeSceneMeta.characterId
+          && Number.isFinite(onlineChatLeaseUntil)
+          && onlineChatLeaseUntil > now) {
+          // User's active direct conversation wins over a proactive life dialogue.
+          // The life event remains durable and is retried after the conversation lease.
+          const deferAt = Math.max(now + 60_000, onlineChatLeaseUntil + 15_000);
+          const deferred = await deferUntil(deferAt, "life schedule: direct chat is active; deferred until " + new Date(deferAt).toISOString());
+          if (!deferred?.ok) await finish("done", "life schedule: direct chat active; defer failed safely");
+          return;
+        }
+
+        const playerSlot = activeSlot("player", "player");
+        const characterSlot = activeSlot("character", lifeSceneMeta.characterId);
+        const playerActor = actors.find(item => item.ownerType === "player" && item.ownerId === "player");
+        const characterActor = actors.find(item => item.ownerType === "character" && item.ownerId === lifeSceneMeta.characterId);
+        const playerActivity = playerSlot?.title || playerActor?.activity || "";
+        const characterActivity = characterSlot?.title || characterActor?.activity || "";
+        const playerLocationName = playerSlot?.plannedLocationName || playerActor?.currentLocationName || "";
+        const characterLocationName = characterSlot?.plannedLocationName || characterActor?.currentLocationName || "";
+        const scheduleContext = [
+          "【云端当前生活状态：本段为本轮生成前重新计算的权威状态，优先级高于旧聊天、旧预约提示和历史地点】",
+          "玩家当前活动：" + (playerActivity || "没有明确日程") + (playerLocationName ? "；当前地点：" + playerLocationName : ""),
+          "角色当前活动：" + (characterActivity || "自由活动") + (characterLocationName ? "；当前地点：" + characterLocationName : ""),
+          "不要沿用旧地点或旧活动；行动必须符合当前活动、地点和睡眠状态。玩家专注时只做轻量陪伴，不替玩家决定行动。",
+        ].join("\n");
+        appendLifeScheduleContext(payload.request.body, payload.request.providerKind, scheduleContext);
+
+        const foregroundLeaseUntil = Date.parse(snapshot.foregroundLeaseUntil || "");
+        if (snapshot.foregroundSceneId === lifeSceneMeta.sceneId
+          && Number.isFinite(foregroundLeaseUntil)
+          && foregroundLeaseUntil > now) {
+          // A visible life scene owns its local turn. Defer the durable background job;
+          // it is not discarded, so it resumes if the app is hidden or terminated.
+          const deferAt = Math.max(now + 60_000, foregroundLeaseUntil + 90_000);
+          const deferred = await deferUntil(deferAt, "life schedule: foreground scene lease active; deferred until " + new Date(deferAt).toISOString());
+          if (!deferred?.ok) await finish("done", "life schedule: foreground scene lease active; defer failed safely");
+          return;
+        }
+      } catch {
+        await finish("done", "life schedule: snapshot invalid; rejected safely");
+        return;
+      }
+    }
     let shortcutStoragePath = "";
 
     if (job.kind === "shortcut_resume" && payload.shortcut) {
@@ -782,7 +1004,17 @@ Deno.serve(async (req: Request) => {
     );
     const todayRows = capResponse.ok ? await capResponse.json() as unknown[] : [];
     if (todayRows.length >= DAILY_GENERATION_CAP) {
-      await finish("done", `daily cap (${DAILY_GENERATION_CAP}) reached`);
+      if (payload.merge?.lifeScene) {
+        // Life autonomy is a durable schedule, not a disposable one-shot. Preserve
+        // its current turn until the daily token budget resets instead of silently
+        // terminating the background chain at the cap.
+        const tomorrowUtc = new Date();
+        tomorrowUtc.setUTCHours(24, 0, 30, 0);
+        const deferred = await deferUntil(tomorrowUtc.getTime(), `life schedule: daily generation cap reached; retry after ${tomorrowUtc.toISOString()}`);
+        if (!deferred?.ok) await finish("done", "life schedule: daily generation cap reached; retry deferral failed");
+      } else {
+        await finish("done", `daily cap (${DAILY_GENERATION_CAP}) reached`);
+      }
       return;
     }
 
@@ -819,6 +1051,105 @@ Deno.serve(async (req: Request) => {
       return;
     }
 
+    // A user can cancel a running job while the provider request is in flight.
+    // Re-check after generation; otherwise the stale snapshot still writes an outbox
+    // row and sends a push after the user has already started a newer turn.
+    if (await isCancelled()) {
+      // Keep the cancelled status intact for diagnostics; do not overwrite it with done.
+      return;
+    }
+
+    // Revalidate after the provider call. A chat can open or the schedule/location can
+    // change while the model is thinking; discard/defer rather than deliver stale context.
+    if (isLifeSceneJob && lifeSceneMeta?.sceneId && lifeSceneMeta.characterId) {
+      const latestResponse = await rest(
+        `push_bridge_snapshots?user_id=eq.${encodeURIComponent(job.user_id)}&rule_id=eq.life-schedule&select=payload,updated_at&limit=1`,
+      ).catch(() => null);
+      const latestRows = latestResponse?.ok
+        ? await latestResponse.json().catch(() => []) as Array<{ payload: EncryptedPayload; updated_at?: string }>
+        : [];
+      const latestRow = latestRows[0];
+      if (!latestRow) {
+        await writeLifeDiagnostic("life_schedule_snapshot_missing", "生成期间无法重新读取最新生活日程快照，已暂停发送。", "检查 push_bridge_snapshots 表、个人云 service-role 权限和 life-scheduler 部署。").catch(() => undefined);
+        await deferUntil(Date.now() + 60_000, "life schedule: latest snapshot missing during generation");
+        return;
+      }
+      const latestSnapshot = JSON.parse(await decryptPayload(latestRow.payload, payloadKey)) as {
+        updatedAt?: string; scheduleVersion?: string; enabled?: boolean; autonomyEnabled?: boolean; proactiveEnabled?: boolean;
+        playerLocationId?: string; characterLocations?: Record<string, string>;
+        scenes?: Array<{ id?: string; status?: string; locationId?: string; characterIds?: string[] }>;
+        onlineChatCharacterId?: string; onlineChatLeaseUntil?: string;
+        foregroundSceneId?: string; foregroundLeaseUntil?: string;
+        actorStates?: Array<{ ownerType?: string; ownerId?: string; activity?: string }>;
+      };
+      const latestNow = Date.now();
+      const latestAt = Date.parse(latestRow.updated_at || latestSnapshot.updatedAt || "");
+      if (!Number.isFinite(latestAt) || latestNow - latestAt > 3 * 60_000) {
+        await writeLifeDiagnostic("life_schedule_snapshot_stale", "生成期间发现生活日程快照已过期，已暂停发送。", "检查 life-scheduler Cron 和 life_schedule_runtime；恢复后任务会自动续跑。").catch(() => undefined);
+        await deferUntil(latestNow + 60_000, "life schedule: latest snapshot stale during generation");
+        return;
+      }
+      if (latestSnapshot.enabled === false || latestSnapshot.autonomyEnabled === false || latestSnapshot.proactiveEnabled === false) {
+        await finish("done", "life schedule: autonomy disabled while generation was running");
+        return;
+      }
+      const latestScene = (latestSnapshot.scenes || []).find(item => item.id === lifeSceneMeta.sceneId);
+      const latestCharacterLocation = latestSnapshot.characterLocations?.[lifeSceneMeta.characterId] || "";
+      if (!latestScene || latestScene.status !== "active"
+        || !latestScene.characterIds?.includes(lifeSceneMeta.characterId)
+        || !latestSnapshot.playerLocationId
+        || latestScene.locationId !== latestSnapshot.playerLocationId
+        || latestCharacterLocation !== latestSnapshot.playerLocationId) {
+        await finish("done", "life schedule: scene or co-location changed during generation; stale turn discarded");
+        return;
+      }
+      if (lifeScheduleVersionAtStart && latestSnapshot.scheduleVersion !== lifeScheduleVersionAtStart) {
+        await deferUntil(latestNow + 60_000, "life schedule: schedule changed during generation; retry with latest state");
+        return;
+      }
+      const latestPlayerActivity = latestSnapshot.actorStates?.find(item => item.ownerType === "player" && item.ownerId === "player")?.activity || "";
+      const latestCharacterActivity = latestSnapshot.actorStates?.find(item => item.ownerType === "character" && item.ownerId === lifeSceneMeta.characterId)?.activity || "";
+      if ((lifePlayerLocationAtStart && latestSnapshot.playerLocationId !== lifePlayerLocationAtStart)
+        || (lifeCharacterLocationAtStart && latestCharacterLocation !== lifeCharacterLocationAtStart)
+        || latestPlayerActivity !== lifePlayerActivityAtStart
+        || latestCharacterActivity !== lifeCharacterActivityAtStart) {
+        await deferUntil(latestNow + 60_000, "life schedule: actor activity/location changed during generation; retry with latest state");
+        return;
+      }
+      const chatLeaseUntil = Date.parse(latestSnapshot.onlineChatLeaseUntil || "");
+      if (latestSnapshot.onlineChatCharacterId === lifeSceneMeta.characterId && Number.isFinite(chatLeaseUntil) && chatLeaseUntil > latestNow) {
+        await deferUntil(chatLeaseUntil + 15_000, "life schedule: direct chat opened during generation; defer life action");
+        return;
+      }
+      const foregroundLeaseUntil = Date.parse(latestSnapshot.foregroundLeaseUntil || "");
+      if (latestSnapshot.foregroundSceneId === lifeSceneMeta.sceneId && Number.isFinite(foregroundLeaseUntil) && foregroundLeaseUntil > latestNow) {
+        await deferUntil(foregroundLeaseUntil + 15_000, "life schedule: foreground scene active during generation; defer background action");
+        return;
+      }
+      if (lifeRuntimeStateVersionAtStart !== null) {
+        const latestRuntimeResponse = await rest(
+          `life_schedule_runtime?user_id=eq.${encodeURIComponent(job.user_id)}&scene_id=eq.${encodeURIComponent(lifeSceneMeta.sceneId)}&character_id=eq.${encodeURIComponent(lifeSceneMeta.characterId)}&select=schedule_version,state_version,updated_at&limit=1`,
+        ).catch(() => null);
+        const latestRuntimeRows = latestRuntimeResponse?.ok
+          ? await latestRuntimeResponse.json().catch(() => []) as Array<{ schedule_version?: string; state_version?: number; updated_at?: string }>
+          : [];
+        const latestRuntime = latestRuntimeRows[0];
+        const latestRuntimeAt = Date.parse(latestRuntime?.updated_at || "");
+        if (!latestRuntime || !latestRuntimeResponse?.ok
+          || latestRuntime.schedule_version !== latestSnapshot.scheduleVersion
+          || !Number.isFinite(latestRuntimeAt) || latestNow - latestRuntimeAt > 2 * 60_000
+          || Number(latestRuntime.state_version) !== lifeRuntimeStateVersionAtStart) {
+          await writeLifeDiagnostic(
+            "life_schedule_runtime_changed_during_generation",
+            "生成期间无法确认角色最新云端运行态，或活动/地点版本已变化；本次生成结果已丢弃。",
+            "等待下一轮 life-scheduler 更新运行态后自动重试；若持续发生，检查 Cron 和 life_schedule_runtime 表权限。",
+          ).catch(() => undefined);
+          await deferUntil(latestNow + 60_000, "life schedule: latest authoritative runtime changed or unavailable during generation");
+          return;
+        }
+      }
+    }
+
     // ── 离线来电：复用小手机既有的通话协议，并兼容已经预约的旧任务 ──
     // 仅在回复开头 200 字内识别严格的「我（向某人）发起了语音通话」标签，
     // 普通叙述中的“某人发起了通话”不会误触发。标签从正文剥离，不进聊天记录。
@@ -845,6 +1176,8 @@ Deno.serve(async (req: Request) => {
         if (!rawText) rawText = "……";
       }
     }
+    // A life-scene turn must remain a scene interaction, never turn into an online-chat call.
+    if (payload.merge?.lifeScene) deliverAsCall = false;
 
     // ── 离线快捷动作：AI 输出【快捷动作：名称】则经本项目网关创建命令并推送运行通知 ──
     // 动作目录在 push_bridge_config.shortcut_actions（个人云由客户端同步；
@@ -1257,10 +1590,24 @@ Deno.serve(async (req: Request) => {
     });
     if (!outboxResponse.ok) {
       const detail = await outboxResponse.text().catch(() => "");
+      if (isLifeSceneJob) await writeLifeDiagnostic(
+        "life_outbox_write_failed",
+        `AI 已生成内容，但生活消息写入 push_outbox 失败：${detail.slice(0, 220) || outboxResponse.status}`,
+        "检查 push_outbox 表结构、service-role 权限和 Supabase 日志；修复后等待云端任务重试。",
+      ).catch(() => undefined);
       await finish("failed", `outbox write failed: ${detail.slice(0, 180) || outboxResponse.status}`);
       return;
     }
+    await writeLifeTraceEvent("消息已写入回传箱", "life_outbox_committed", "AI 结果已成功持久化到 push_outbox，开始通知投递。");
     await progress("outbox written, pushing");
+
+    // Close the remaining cancellation window between outbox persistence and delivery.
+    // If the job was cancelled after the row was written, remove the undelivered row
+    // before returning so the client cannot merge a superseded reply later.
+    if (await isCancelled()) {
+      await rest(`push_outbox?job_id=eq.${encodeURIComponent(job.id)}`, { method: "DELETE" }).catch(() => undefined);
+      return;
+    }
 
     if (shortcutStoragePath) {
       await fetch(`${supabaseUrl}/storage/v1/object/shortcut-command-media/${shortcutStoragePath}`, {
@@ -1295,18 +1642,30 @@ Deno.serve(async (req: Request) => {
       : null;
     if (!vapid && webSubs.length > 0) pushErrors.push("no vapid config");
     const title = payload.notify?.title || "小手机";
-    const callSessionId = typeof payload.merge?.sessionId === "string" ? payload.merge.sessionId : "";
-    // 来电：单条推送（不分段），点开带 ring 参数直达振铃；正文照常进 outbox
+    const isLifeSceneNotification = Boolean(payload.merge?.lifeScene);
+    const callSessionId = !isLifeSceneNotification && typeof payload.merge?.sessionId === "string" ? payload.merge.sessionId : "";
+    // Life-scene notifications return to the life page, not the underlying online chat session.
     const targetUrl = deliverAsCall && callSessionId
       ? `/?ring=${encodeURIComponent(callSessionId)}&rt=${Date.now()}`
-      : (payload.notify?.url || "/");
-    // 预览文案先过一遍输出正则（与聊天落账同一批规则），再走纯文本分条——
-    // 否则用户预设里的输出正则在通知里不生效，两处文案对不上。
-    const previewText = applyOutputRegexToPreview(rawText, payload.merge);
+      : (isLifeSceneNotification ? "/life" : (payload.notify?.url || "/"));
+    const lifeSceneOutput = isLifeSceneNotification ? parseLifeSceneOutput(rawText) : null;
+    const lifeScenePreview = lifeSceneOutput
+      ? [lifeSceneOutput.action, ...lifeSceneOutput.dialogues].filter(Boolean).join("\n\n")
+      : rawText;
+    // 生活现场一轮就是一条通知；不能把 JSON 或长文本按句子拆成多条推送。
     let parts = deliverAsCall
       ? ["来电话了…"]
-      : splitResponseForPushPreview(previewText).slice(0, 6);
+      : isLifeSceneNotification && lifeScenePreview.trim()
+        ? [lifeScenePreview.trim()]
+        : splitResponseForPushPreview(lifeScenePreview).slice(0, 6);
     if (parts.length === 0) parts = ["发来一条消息"];
+
+    // Notification setup may take additional time after outbox persistence. Check once
+    // more immediately before the first push to narrow the stale-notification race.
+    if (await isCancelled()) {
+      await rest(`push_outbox?job_id=eq.${encodeURIComponent(job.id)}`, { method: "DELETE" }).catch(() => undefined);
+      return;
+    }
 
     for (let index = 0; index < parts.length; index += 1) {
       if (index > 0) await sleep(500);
@@ -1315,19 +1674,13 @@ Deno.serve(async (req: Request) => {
       // 在通知里只剩开头一句，聊天里却是完整的。正常聊天单条远不到 200 字，
       // 几乎不会触发截断。
       const partBody = parts[index].slice(0, 200);
-      // 普通消息也让浏览器/PWA 的通知能点进对应会话：url 带 open-chat 深链，
-      // personal-push-sw 的 notificationclick 据此导航（与壳的 #open-chat 同一约定）。
-      const webTargetUrl = !deliverAsCall && callSessionId
-        ? `/#open-chat=${encodeURIComponent(callSessionId)}`
-        : targetUrl;
       const message = JSON.stringify({
         type: deliverAsCall ? "incoming_call" : "chat_outbox",
         title: deliverAsCall ? `📞 ${title}` : title,
         body: partBody,
         tag: `${job.id}-${index}`,
-        url: webTargetUrl,
-        ...(callSessionId ? { sessionId: callSessionId } : {}),
-        ...(deliverAsCall ? { callTs: Date.now() } : {}),
+        url: targetUrl,
+        ...(deliverAsCall ? { sessionId: callSessionId, callTs: Date.now() } : {}),
       });
       if (vapid) {
         for (const sub of webSubs) {
@@ -1359,13 +1712,23 @@ Deno.serve(async (req: Request) => {
                   body: partBody,
                   url: targetUrl,
                   // 老壳不认识这些字段 → 照常显示普通通知，自然向下兼容。
-                  // sessionId 让壳点击通知直达对应会话（普通消息原先漏了它，点开只回桌面）；
-                  // 现在普通消息与来电都带上，壳据此拼深链跳转。
+                  // sessionId 让壳点击通知直达对应会话（普通消息原先没有，点开只回桌面）；
                   // avatar 是角色头像（data URL 或直链），有就当通知大图标，没有壳用默认图。
-                  ...(payload.merge?.sessionId ? { sessionId: String(payload.merge.sessionId) } : {}),
+                  // Life-scene notifications need the chat session ID only for the native quick-reply action; taps still open /life.
+                  ...(isLifeSceneJob && typeof payload.merge?.sessionId === "string"
+                    ? { sessionId: payload.merge.sessionId }
+                    : callSessionId ? { sessionId: callSessionId } : {}),
                   ...(typeof payload.notify?.avatar === "string" && payload.notify.avatar
                     ? { avatar: payload.notify.avatar }
                     : {}),
+                  ...(isLifeSceneJob ? {
+                    kind: "life_scene",
+                    sceneId: String(payload.merge?.lifeScene?.sceneId ?? ""),
+                    characterId: String(payload.merge?.lifeScene?.characterId ?? ""),
+                    characterName: String(payload.merge?.lifeScene?.characterName ?? title),
+                    actionText: lifeSceneOutput?.action ?? "",
+                    dialogueText: lifeSceneOutput?.dialogues[0] ?? "",
+                  } : {}),
                   ...(deliverAsCall ? { kind: "call", characterName: title, callTs: Date.now() } : {}),
                 },
               })),
@@ -1379,6 +1742,18 @@ Deno.serve(async (req: Request) => {
         }
       }
       await progress(`pushed ${index + 1}/${parts.length}${pushErrors.length ? `, errors: ${pushErrors[0]}` : ""}`);
+    }
+
+    if (isLifeSceneJob && pushErrors.length) {
+      await writeLifeDiagnostic(
+        "life_notification_delivery_failed",
+        `生活消息已写入云端，但有通知通道投递失败：${pushErrors.slice(0, 3).join(" | ")}`,
+        "检查 Web Push 订阅是否过期、VAPID 配置及 Android Realtime 广播权限；消息仍保留在 push_outbox，可在客户端同步时取回。",
+      ).catch(() => undefined);
+    } else if (isLifeSceneJob && pushed > 0) {
+      await rest(`life_schedule_diagnostics?id=eq.${encodeURIComponent(`life-scheduler:${job.user_id}:life_notification_delivery_failed`)}`, {
+        method: "PATCH", body: JSON.stringify({ resolved_at: new Date().toISOString(), updated_at: new Date().toISOString() }),
+      }).catch(() => undefined);
     }
 
     // 第一轮正文已经落库并完成推送后，再发“运行快捷指令”通知。用户看到的
@@ -1396,7 +1771,7 @@ Deno.serve(async (req: Request) => {
     const idleRepeat = payload.merge?.idleRepeat as
       | { intervalMs?: number; remaining?: number; quietWin?: { startMin: number; endMin: number; tzOffsetMin: number } | null }
       | undefined;
-    if (idleRepeat && Number(idleRepeat.remaining) > 0 && Number(idleRepeat.intervalMs) > 0) {
+    if (!payload.merge?.lifeScene && idleRepeat && Number(idleRepeat.remaining) > 0 && Number(idleRepeat.intervalMs) > 0) {
       const intervalMs = Number(idleRepeat.intervalMs);
       let nextFire = Date.now() + intervalMs;
       // 落在安静时段内则顺延到时段结束
@@ -1456,6 +1831,7 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    await writeLifeTraceEvent("通知投递结束", pushErrors.length ? "life_delivery_partial_or_failed" : "life_delivery_completed", `通知通道成功计数 ${pushed}；失败数 ${pushErrors.length}；${pushErrors.slice(0, 3).join(" | ") || "无投递错误"}`, pushErrors.length ? "warning" : "info");
     await finish("done", `generated, pushed ${pushed}${shortcutActionNote ? `, ${shortcutActionNote}` : ""}${pushErrors.length ? `, errors: ${pushErrors.slice(0, 3).join(" | ")}` : ""}`);
   } catch (err) {
     await finish("failed", err instanceof Error ? err.message : String(err));

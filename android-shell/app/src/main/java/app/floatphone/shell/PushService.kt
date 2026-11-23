@@ -236,7 +236,7 @@ class PushService : Service() {
                         }.isSuccess
                         if (shown) return
                     }
-                    showMessageNotification(title, text2, body.optString("sessionId"), body.optString("avatar"))
+                    showMessageNotification(title, text2, body.optString("sessionId"), body.optString("avatar"), body.optString("kind"), body.optString("sceneId"))
                 }
             }
 
@@ -289,18 +289,23 @@ class PushService : Service() {
      * 点通知的落点：带 sessionId 时经深链直达对应会话，否则回首页。
      * 深链与 MainActivity 共用 EXTRA_OPEN_URL 通道。
      */
-    private fun contentIntent(sessionId: String? = null): PendingIntent {
+    private fun contentIntent(sessionId: String? = null, lifeScene: Boolean = false, sceneId: String? = null): PendingIntent {
         val intent = Intent(this, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         val id = sessionId?.trim().orEmpty()
-        if (id.isNotEmpty()) {
-            intent.putExtra(
-                MainActivity.EXTRA_OPEN_URL,
-                "${MainActivity.SITE_URL.trimEnd('/')}/#open-chat=${android.net.Uri.encode(id)}",
-            )
+        val targetUrl = if (lifeScene) {
+            // Life-scene push taps must return to the living-world screen, not the
+            // normal chat session used only to build the offline model snapshot.
+            "${MainActivity.SITE_URL.trimEnd('/')}/life"
+        } else if (id.isNotEmpty()) {
+            "${MainActivity.SITE_URL.trimEnd('/')}/#open-chat=${android.net.Uri.encode(id)}"
+        } else {
+            ""
         }
+        if (targetUrl.isNotEmpty()) intent.putExtra(MainActivity.EXTRA_OPEN_URL, targetUrl)
+        val requestCode = if (lifeScene) ("life:" + sceneId.orEmpty()).hashCode() else id.hashCode()
         return PendingIntent.getActivity(
-            this, 0, intent,
+            this, requestCode, intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
     }
@@ -378,14 +383,14 @@ class PushService : Service() {
         getSystemService(NotificationManager::class.java).notify(CallAlert.NOTIF_MISSED_ID, notification)
     }
 
-    private fun showMessageNotification(title: String, body: String, sessionId: String? = null, avatarUrl: String? = null) {
+    private fun showMessageNotification(title: String, body: String, sessionId: String? = null, avatarUrl: String? = null, kind: String = "", sceneId: String = "") {
         val builder = NotificationCompat.Builder(this, CH_MESSAGES)
             .setSmallIcon(R.drawable.ic_stat)
             .setContentTitle(title)
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setAutoCancel(true)
-            .setContentIntent(contentIntent(sessionId))
+            .setContentIntent(contentIntent(sessionId, kind == "life_scene", sceneId))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
         // 角色头像当通知大图标（服务端随广播带的 avatar：data URL 或直链）。
         // 取不到就退回默认图标——头像只是锦上添花，绝不能拖住或搞丢通知。
@@ -393,7 +398,11 @@ class PushService : Service() {
         // 带「回复」按钮：用户可以直接在通知横幅上回一句，不用点开 App。
         // 没有 sessionId 的通知（系统提醒类）挂了也没处送，所以只在有时才加。
         val sid = sessionId?.trim().orEmpty()
-        if (sid.isNotEmpty()) builder.addAction(buildReplyAction(sid))
+        if (kind == "life_scene" && sid.isNotEmpty() && sceneId.isNotEmpty()) {
+            builder.setContentTitle("生活现场 · 主动消息")
+            builder.addAction(buildLifeReplyAction(sid, sceneId, "action", "回复行动"))
+            builder.addAction(buildLifeReplyAction(sid, sceneId, "dialogue", "回复对话"))
+        } else if (sid.isNotEmpty()) builder.addAction(buildReplyAction(sid))
         getSystemService(NotificationManager::class.java).notify(notifId++, builder.build())
         if (notifId > 400) notifId = 100
     }
@@ -404,6 +413,18 @@ class PushService : Service() {
      * PendingIntent 必须是 MUTABLE：用户输入要先被系统填进 RemoteInput，
      * 不可变的 PendingIntent 装不下这个结果，回复框会打不开。
      */
+    private fun buildLifeReplyAction(sessionId: String, sceneId: String, mode: String, label: String): NotificationCompat.Action {
+        val remoteInput = RemoteInput.Builder(NotificationReplyReceiver.KEY_REPLY_TEXT).setLabel(label).build()
+        val intent = Intent(this, NotificationReplyReceiver::class.java).apply {
+            action = NotificationReplyReceiver.ACTION_REPLY
+            putExtra(NotificationReplyReceiver.EXTRA_SESSION_ID, sessionId)
+            putExtra(NotificationReplyReceiver.EXTRA_SCENE_ID, sceneId)
+            putExtra(NotificationReplyReceiver.EXTRA_REPLY_MODE, mode)
+        }
+        val pending = PendingIntent.getBroadcast(this, (sessionId + sceneId + mode).hashCode(), intent, PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        return NotificationCompat.Action.Builder(R.drawable.ic_stat, label, pending).addRemoteInput(remoteInput).setAllowGeneratedReplies(true).build()
+    }
+
     private fun buildReplyAction(sessionId: String): NotificationCompat.Action {
         val remoteInput = RemoteInput.Builder(NotificationReplyReceiver.KEY_REPLY_TEXT)
             .setLabel("回复")

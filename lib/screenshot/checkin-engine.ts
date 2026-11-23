@@ -31,6 +31,45 @@ import {
 import { consumePendingUserShot, hasCheckInBridge, readCheckInCapabilities, requestCheckIn } from "./checkin";
 import { resolveCheckInGuidance } from "./checkin-guidance";
 import { ensureShellOverlayListener, subscribeShellOverlayEvents } from "../shell-call-overlay";
+import type { CheckInOutcome } from "./types";
+import { loadVirtualLifeState } from "../life/life-storage";
+import { getActorClock, getCurrentActorSchedule, resolveActorLifeNow } from "../life/life-runtime";
+
+
+/** Keep autonomous screenshot requests consistent with the character's current life context. */
+function isCheckInAllowedByLifeContext(characterId: string): boolean {
+  const life = loadVirtualLifeState();
+  if (!life.settings.enabled) return true; // Preserve legacy check-in behavior when the life engine is off.
+  if (!life.settings.enableCharacterAutonomy) return false;
+  const now = resolveActorLifeNow(getActorClock(life, "character", characterId));
+  const schedule = getCurrentActorSchedule(life, "character", characterId, now);
+  const actor = life.actorStates.find(item => item.ownerType === "character" && item.ownerId === characterId);
+  const activity = (actor?.activity || "") + " " + (schedule?.title || "");
+  if (/睡眠|睡觉|入睡|午休/.test(activity)) return false;
+  if (/开会|手术|考试|驾驶|训练|专注工作|专注学习/.test(actor?.activity || "")) return false;
+  const player = life.actorStates.find(item => item.ownerType === "player" && item.ownerId === "player");
+  if (actor?.actualLocationId && player?.actualLocationId && actor.actualLocationId === player.actualLocationId) return false;
+  const sharedScene = life.scenes.some(scene => scene.status === "active" && scene.participants.some(p => p.ownerType === "player" && p.ownerId === "player") && scene.participants.some(p => p.ownerType === "character" && p.ownerId === characterId));
+  return !sharedScene;
+}
+
+export function buildCheckInLifeContextNote(characterId: string): string {
+  const life = loadVirtualLifeState();
+  if (!life.settings.enabled) return "";
+  const character = loadCharacters().find(item => item.id === characterId);
+  const now = resolveActorLifeNow(getActorClock(life, "character", characterId));
+  const schedule = getCurrentActorSchedule(life, "character", characterId, now);
+  const actor = life.actorStates.find(item => item.ownerType === "character" && item.ownerId === characterId);
+  const parts = [
+    "生活情境（只补充你自己的状态，不代表你知道玩家此刻在哪里）：",
+    "你的虚拟时间：" + now.toLocaleString("zh-CN"),
+    actor?.activity ? "你实际正在：" + actor.activity : "",
+    actor?.actualLocationName ? "你实际所在地点：" + actor.actualLocationName : "",
+    schedule?.title ? "原计划：" + schedule.title : "",
+    character?.name ? "请按上述生活状态自然回应查岗结果；不要假装一直盯着玩家，也不要将未发生的事情写成记忆。" : "",
+  ].filter(Boolean);
+  return parts.join("\n");
+}
 
 /** 一次查岗尝试的结论（给调用方/设置页做记录用）。 */
 export type CheckInAttempt =
@@ -126,11 +165,12 @@ export async function runCheckIn(
       });
       // 用户可给这次结果写一句反应指导语（设置 → 截屏 → 主动查岗）。
       // 只随本轮请求送出、不落库——否则后面每一轮都会重新看到它。
-      const acceptedGuidance = resolveCheckInGuidance("accepted", name);
-      void requestBackgroundChatReply(
-        sessionId,
-        acceptedGuidance ? { ephemeralSystemNote: acceptedGuidance } : undefined,
-      ).catch(() => undefined);
+      const acceptedGuidance = [resolveCheckInGuidance("accepted", name), buildCheckInLifeContextNote(characterId)].filter(Boolean).join("\n\n");
+      void requestBackgroundChatReply(sessionId, {
+        ephemeralSystemNote: acceptedGuidance || undefined,
+        appId: "checkin",
+        appTags: ["checkin", "screenshot", "accepted"],
+      }).catch(() => undefined);
       return { ok: true, accepted: true };
     } catch {
       return { ok: false, reason: "图片没能保存，这次没发出去" };
@@ -156,11 +196,12 @@ export async function runCheckIn(
   // 拒绝也让它有反应（用户明确要的）——被拒时该失落还是说没关系，交给角色自己决定。
   // 三种失败结果各自可配指导语，同样只随本轮请求送出。
   const guidanceKind = declined ? "declined" : timedOut ? "timeout" : "failed";
-  const guidance = resolveCheckInGuidance(guidanceKind, name);
-  void requestBackgroundChatReply(
-    sessionId,
-    guidance ? { ephemeralSystemNote: guidance } : undefined,
-  ).catch(() => undefined);
+  const guidance = [resolveCheckInGuidance(guidanceKind, name), buildCheckInLifeContextNote(characterId)].filter(Boolean).join("\n\n");
+  void requestBackgroundChatReply(sessionId, {
+    ephemeralSystemNote: guidance || undefined,
+    appId: "checkin",
+    appTags: ["checkin", "screenshot", guidanceKind],
+  }).catch(() => undefined);
   return { ok: true, accepted: false, reason: outcome.reason };
 }
 
@@ -208,7 +249,7 @@ export async function deliverUserShot(outcome: CheckInOutcome): Promise<{ ok: bo
       base64: outcome.base64,
       width: outcome.width,
       height: outcome.height,
-      bytes: outcome.bytes,
+      bytes: Math.floor(outcome.base64.length * 3 / 4),
     });
     if (!record) {
       return { ok: false, reason: "图片没能保存，这次没发出去" };
@@ -395,6 +436,7 @@ export async function pollDueCheckIns(): Promise<number> {
   let fired = 0;
   for (const [characterId, config] of Object.entries(all)) {
     if (!shouldFireCheckIn(characterId, config)) continue;
+    if (!isCheckInAllowedByLifeContext(characterId)) continue;
     const result = await runCheckIn(characterId, config);
     if (result.ok) fired += 1;
   }
