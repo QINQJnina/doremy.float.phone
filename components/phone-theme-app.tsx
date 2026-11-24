@@ -38,6 +38,7 @@ import {
   SINGLE_PAGE_WIDGET_CATALOG,
   type WidgetInstance,
   type WidgetType,
+  type WidgetSize,
 } from "@/lib/widget-types";
 import {
   buildOccupancyGrid,
@@ -116,7 +117,7 @@ type PhoneThemeAppProps = {
   onSingleWidgetsChange?: (types: string[]) => void;
   /** 单页组件的尺寸覆盖（类型 → 尺寸） */
   singleWidgetSizes?: Record<string, string>;
-  onSingleWidgetSizeChange?: (type: string, size: string) => void;
+  onSingleWidgetSizeChange?: (type: string, size: WidgetSize) => void;
   /** 单页组件下面那行名称是否显示 */
   singleWidgetLabels?: boolean;
   onSingleWidgetLabelsChange?: (visible: boolean) => void;
@@ -239,7 +240,7 @@ function DesktopModePage({
   singleWidgets?: string[];
   onSingleWidgetsChange?: (types: string[]) => void;
   singleWidgetSizes?: Record<string, string>;
-  onSingleWidgetSizeChange?: (type: string, size: string) => void;
+  onSingleWidgetSizeChange?: (type: string, size: WidgetSize) => void;
   singleWidgetLabels?: boolean;
   onSingleWidgetLabelsChange?: (visible: boolean) => void;
 }) {
@@ -290,7 +291,7 @@ function DesktopModePage({
   };
 
   /** 可选的尺寸档位（单页是流式排布，这几档够覆盖常见诉求） */
-  const SIZE_CHOICES = ["1x4", "2x2", "3x2", "2x4", "4x4"];
+  const SIZE_CHOICES: WidgetSize[] = ["1x4", "2x2", "3x2", "2x4", "4x4"];
 
   const options: Array<{ id: DesktopViewMode; title: string; desc: string }> = [
     {
