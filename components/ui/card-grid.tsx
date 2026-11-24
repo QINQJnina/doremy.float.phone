@@ -86,7 +86,11 @@ export function FeaturedCard({ item }: { item: FeaturedCardItem }) {
         className={`card-icon${item.glassIcon ? " card-icon-glass" : ""}`}
         style={item.glassIcon ? undefined : cardIconStyle(item.iconColor)}
       >
-        {item.glassIcon ? <GlassIcon name={item.glassIcon} /> : <Icon size={22} strokeWidth={1.75} />}
+        {item.glassIcon ? (
+            <GlassIcon name={item.glassIcon} />
+        ) : Icon ? (
+            <Icon size={22} strokeWidth={1.75} />
+        ) : null}
       </span>
       <div className="card-featured-body">
         <div className="card-featured-label">{item.label}</div>
